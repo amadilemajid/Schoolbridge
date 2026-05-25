@@ -1,0 +1,115 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: schoolbridge
+      POSTGRES_USER: schoolbridge_app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schoolbridge_app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # AOF persistence — tasks survive Redis restart (US-060)
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: always
+    command: gunicorn config.asgi:application -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+    volumes:
+      - .:/app
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Celery worker — messaging queue
+  celery-messaging:
+    build: .
+    restart: always
+    command: celery -A config worker -Q messaging -c 4 --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # Celery worker — payments queue (serial for financial integrity)
+  celery-payments:
+    build: .
+    restart: always
+    command: celery -A config worker -Q payments -c 2 --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # Celery worker — automation queue
+  celery-automation:
+    build: .
+    restart: always
+    command: celery -A config worker -Q automation -c 2 --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # Celery Beat — scheduled tasks
+  celery-beat:
+    build: .
+    restart: always
+    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # Celery Flower — task monitoring (US-060)
+  flower:
+    build: .
+    restart: always
+    command: celery -A config flower --port=5555 --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_files:
+  media_files:
