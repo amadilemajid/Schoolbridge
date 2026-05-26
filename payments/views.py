@@ -211,8 +211,15 @@ class PaymentViewSet(AuditMixin, viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        payment = self.perform_create(serializer)
-        return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+        try:
+            payment = self.perform_create(serializer)
+            if payment:
+                return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+            return Response({'error': 'Payment creation failed.'}, status=400)
+        except Exception as e:
+            import logging
+            logging.getLogger('payments').exception(f"Payment create error: {e}")
+            return Response({'error': str(e)}, status=400)
 
     @action(detail=True, methods=['post'], permission_classes=[IsDirector])
     def approve(self, request, pk=None):

@@ -43,6 +43,7 @@ THIRD_PARTY_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_celery_beat',
+    'django_celery_results',
 ]
 LOCAL_APPS = [
     'schools',

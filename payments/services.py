@@ -91,7 +91,7 @@ class FeeService:
             student__is_active=True,
         ).select_related('student').annotate(
             payment_status=Case(
-                When(amount_paid__gte=models.F('total_amount') - models.F('amount_waived'),
+                When(amount_paid__gte=F('total_amount') - F('amount_waived'),
                      then=Value('fully_paid')),
                 When(amount_paid__gt=0, then=Value('partial')),
                 default=Value('zero'),
@@ -129,8 +129,11 @@ class FeeService:
         if not requires_approval:
             cls._apply_payment_to_fee_record(fee_record, amount)
             # Send WhatsApp receipt async (US-028)
-            from messaging.tasks import send_payment_receipt
-            send_payment_receipt.delay(str(payment.id))
+            try:
+                from messaging.tasks import send_payment_receipt
+                send_payment_receipt.delay(str(payment.id))
+            except Exception:
+                pass
 
         logger.info(
             f"Manual payment recorded: UGX {amount:,} for {fee_record.student} "
@@ -151,14 +154,17 @@ class FeeService:
 
         if payment.fee_record:
             cls._apply_payment_to_fee_record(payment.fee_record, payment.amount)
-            from messaging.tasks import send_payment_receipt
-            send_payment_receipt.delay(str(payment.id))
+            try:
+                from messaging.tasks import send_payment_receipt
+                send_payment_receipt.delay(str(payment.id))
+            except Exception:
+                pass
 
     @classmethod
     def _apply_payment_to_fee_record(cls, fee_record, amount):
         """Atomically update the FeeRecord balance."""
         FeeRecord.all_objects.filter(pk=fee_record.pk).update(
-            amount_paid=models.F('amount_paid') + amount
+            amount_paid=__import__("django.db.models", fromlist=["F"]).F('amount_paid') + amount
         )
         fee_record.refresh_from_db()
 
@@ -185,7 +191,7 @@ class FeeService:
         # Subtract from fee record
         if payment.fee_record:
             FeeRecord.all_objects.filter(pk=payment.fee_record.pk).update(
-                amount_paid=models.F('amount_paid') - payment.amount
+                amount_paid=F('amount_paid') - payment.amount
             )
 
         # Notify parent
@@ -209,7 +215,7 @@ class FeeService:
         )
         if approved_by:
             FeeRecord.all_objects.filter(pk=fee_record.pk).update(
-                amount_waived=models.F('amount_waived') + amount
+                amount_waived=F('amount_waived') + amount
             )
         return waiver
 
@@ -456,3 +462,4 @@ class MoMoService:
             return {'success': True, 'message': 'Airtel credentials validated.'}
         except Exception as e:
             return {'success': False, 'message': str(e)}
+
