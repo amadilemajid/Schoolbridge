@@ -219,3 +219,10 @@ LOGGING = {
     },
 }
 
+# MTN MoMo Sandbox (US-026)
+MTN_MOMO_SUBSCRIPTION_KEY = env('MTN_MOMO_SUBSCRIPTION_KEY', default='')
+MTN_MOMO_API_USER = env('MTN_MOMO_API_USER', default='')
+MTN_MOMO_API_KEY = env('MTN_MOMO_API_KEY', default='')
+MTN_MOMO_ENVIRONMENT = env('MTN_MOMO_ENVIRONMENT', default='sandbox')
+MTN_MOMO_BASE_URL = env('MTN_MOMO_BASE_URL', default='https://sandbox.momodeveloper.mtn.com')
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
