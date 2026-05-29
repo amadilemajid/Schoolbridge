@@ -157,9 +157,10 @@ class PaymentPlanSerializer(serializers.ModelSerializer):
         with transaction.atomic():
             plan = PaymentPlan.all_objects.create(**validated_data)
             for i, inst in enumerate(instalments_data, start=1):
+                inst_number = inst.pop('instalment_number', i)
                 PaymentPlanInstalment.objects.create(
                     plan=plan,
-                    instalment_number=i,
+                    instalment_number=inst_number,
                     **inst,
                 )
         return plan
