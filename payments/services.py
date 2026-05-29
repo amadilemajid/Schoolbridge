@@ -227,13 +227,13 @@ class FeeService:
             FeeRecord.all_objects.filter(
                 school=school, academic_term=term, student__is_active=True,
             ).annotate(
-                balance=ExpressionWrapper(
+                outstanding_balance=ExpressionWrapper(
                     F('total_amount') - F('amount_paid') - F('amount_waived'),
                     output_field=DecimalField()
                 )
-            ).filter(balance__gt=0)
+            ).filter(outstanding_balance__gt=0)
             .select_related('student', 'student__current_class')
-            .order_by('-balance')
+            .order_by('-outstanding_balance')
         )
 
     @classmethod
