@@ -49,3 +49,44 @@ def refresh_airtel_tokens(self):
                 message=f"Failed to refresh Airtel token for school {cfg.school_id}: {exc}",
                 payload={'school_id': str(cfg.school_id)},
             )
+
+
+@shared_task(bind=True, max_retries=5, default_retry_delay=60)
+def retry_failed_momo_webhook(self, school_id, payload, provider):
+    """
+    US-068: Retry failed MoMo webhook processing up to 5 times.
+    Called when webhook processing fails due to transient errors.
+    """
+    from schools.models import School
+    from payments.services import MoMoService
+
+    try:
+        school = School.objects.get(id=school_id)
+        if provider == 'mtn':
+            payment, status_msg = MoMoService.process_mtn_ipn(
+                school=school,
+                payload=payload,
+                raw_bytes=str(payload).encode(),
+                signature='',
+            )
+        else:
+            payment, status_msg = MoMoService.process_airtel_ipn(
+                school=school,
+                payload=payload,
+            )
+        logger.info(
+            f"Webhook retry succeeded: {status_msg} school={school_id} attempt={self.request.retries + 1}"
+        )
+    except Exception as exc:
+        logger.error(f"Webhook retry failed (attempt {self.request.retries + 1}): {exc}")
+        try:
+            self.retry(exc=exc)
+        except MaxRetriesExceededError:
+            logger.error(f"Webhook retry exhausted after 5 attempts for school {school_id}")
+            from notifications.services import send_admin_alert
+
+            send_admin_alert(
+                alert_type='MOMO_WEBHOOK_RETRY_EXHAUSTED',
+                message=f"MoMo webhook failed after 5 retries for school {school_id}",
+                payload={'school_id': school_id, 'provider': provider},
+            )
