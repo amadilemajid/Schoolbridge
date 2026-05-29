@@ -161,6 +161,32 @@ class FeeRecordViewSet(AuditMixin, viewsets.ReadOnlyModelViewSet):
             return Response({'error': 'No current term.'}, status=400)
         return Response(FeeService.get_dashboard_summary(request.user.school, term))
 
+    @action(detail=False, methods=['get'])
+    def term_comparison(self, request):
+        """US-025: Compare fee collection across terms."""
+        from schools.models import AcademicTerm
+
+        terms = AcademicTerm.objects.filter(
+            school=request.user.school
+        ).order_by('start_date')
+        data = []
+        for term in terms:
+            summary = FeeService.get_dashboard_summary(request.user.school, term)
+            data.append({
+                'term_id': term.id,
+                'term_name': str(term),
+                'total_expected': summary.get('total_expected') or 0,
+                'total_collected': summary.get('total_collected') or 0,
+                'total_waived': summary.get('total_waived') or 0,
+                'total_students': summary.get('total_students') or 0,
+                'fully_paid': summary.get('fully_paid') or 0,
+                'collection_rate': round(
+                    (summary.get('total_collected') or 0) /
+                    (summary.get('total_expected') or 1) * 100, 1
+                ),
+            })
+        return Response(data)
+
 
 class PaymentViewSet(AuditMixin, viewsets.ModelViewSet):
     """
