@@ -19,7 +19,7 @@ class WhatsAppService:
     """
     BASE_URL = settings.WHATSAPP_API_URL
     PHONE_ID = settings.WHATSAPP_PHONE_NUMBER_ID
-    TOKEN = settings.WHATSAPP_ACCESS_TOKEN
+    TOKEN = None  # Loaded dynamically per request
 
     @classmethod
     def send_template_message(cls, *, to_phone, template_name, language='en',
@@ -46,7 +46,7 @@ class WhatsAppService:
             response = requests.post(
                 f"{cls.BASE_URL}/{cls.PHONE_ID}/messages",
                 headers={
-                    'Authorization': f'Bearer {cls.TOKEN}',
+                    'Authorization': f'Bearer {settings.WHATSAPP_ACCESS_TOKEN}',
                     'Content-Type': 'application/json',
                 },
                 json=payload,
@@ -75,7 +75,7 @@ class WhatsAppService:
             response = requests.post(
                 f"{cls.BASE_URL}/{cls.PHONE_ID}/messages",
                 headers={
-                    'Authorization': f'Bearer {cls.TOKEN}',
+                    'Authorization': f'Bearer {settings.WHATSAPP_ACCESS_TOKEN}',
                     'Content-Type': 'application/json',
                 },
                 json=payload,
@@ -91,11 +91,9 @@ class WhatsAppService:
 
     @staticmethod
     def _normalise_phone(phone):
-        phone = str(phone).strip().replace(' ', '').replace('-', '')
+        phone = str(phone).strip().replace('+', '').replace(' ', '').replace('-', '')
         if phone.startswith('0'):
-            return '+256' + phone[1:]
-        if phone.startswith('256') and not phone.startswith('+'):
-            return '+' + phone
+            return '256' + phone[1:]
         return phone
 
     @staticmethod
