@@ -6,10 +6,10 @@ from .views import (
 )
 
 router = DefaultRouter()
-router.register('', SchoolViewSet, basename='school')
 router.register('academic-years', AcademicYearViewSet, basename='academic-year')
 router.register('terms', AcademicTermViewSet, basename='term')
 router.register('holidays', HolidayPeriodViewSet, basename='holiday')
 router.register('momo-config', SchoolMoMoConfigViewSet, basename='momo-config')
+router.register('', SchoolViewSet, basename='school')
 
 urlpatterns = [path('', include(router.urls))]
