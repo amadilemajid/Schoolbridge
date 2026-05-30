@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from .models import School, AcademicYear, AcademicTerm, HolidayPeriod, SchoolMoMoConfig
 from .serializers import (
     SchoolSerializer, AcademicYearSerializer, AcademicTermSerializer,
@@ -132,3 +133,49 @@ class SchoolMoMoConfigViewSet(AuditMixin, viewsets.ModelViewSet):
             cfg.last_tested_at = timezone.now()
             cfg.save(update_fields=['last_tested_at'])
         return Response(result)
+
+
+class DistrictBenchmarkView(APIView):
+    """US-057: Compare school performance vs district averages."""
+    permission_classes = [IsDirector]
+
+    def get(self, request):
+        from payments.services import FeeService
+        school = request.user.school
+        term = school.terms.filter(is_current=True).first()
+        if not term:
+            return Response({'error': 'No current term.'}, status=400)
+
+        school_summary = FeeService.get_dashboard_summary(school, term)
+        school_rate = round(
+            (school_summary.get('total_collected') or 0) /
+            (school_summary.get('total_expected') or 1) * 100, 1
+        )
+
+        from schools.models import School, AcademicTerm
+        from django.db.models import Avg
+        district_schools = School.objects.filter(
+            district=school.district, is_active=True
+        ).exclude(id=school.id)
+
+        district_rates = []
+        for s in district_schools:
+            s_term = s.terms.filter(is_current=True).first()
+            if s_term:
+                s_summary = FeeService.get_dashboard_summary(s, s_term)
+                rate = round(
+                    (s_summary.get('total_collected') or 0) /
+                    (s_summary.get('total_expected') or 1) * 100, 1
+                )
+                district_rates.append(rate)
+
+        district_avg = round(sum(district_rates) / len(district_rates), 1) if district_rates else None
+
+        return Response({
+            'school_name': school.name,
+            'district': school.district,
+            'school_collection_rate': school_rate,
+            'district_average_collection_rate': district_avg,
+            'schools_in_district': len(district_rates),
+            'above_district_average': school_rate > district_avg if district_avg else None,
+        })
