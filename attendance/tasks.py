@@ -39,3 +39,43 @@ def send_teacher_attendance_reminders(self):
                     school=school,
                 )
         logger.info(f"Attendance reminders sent for {school.name}: {classes_needing_reminder.count()} classes")
+
+
+@shared_task(bind=True)
+def check_low_attendance_alerts(self):
+    """
+    US-051: Alert parents and director when student attendance drops below 75%.
+    Run weekly via Celery beat.
+    """
+    from schools.models import School
+    from students.models import Student
+    from notifications.services import NotificationService
+    from attendance.services import AttendanceService
+    from messaging.services import WhatsAppService
+
+    for school in School.objects.filter(is_active=True):
+        term = school.terms.filter(is_current=True).first()
+        if not term:
+            continue
+        students = Student.all_objects.filter(school=school, is_active=True)
+        for student in students:
+            rate = AttendanceService.get_attendance_rate(student, term)
+            if rate is not None and rate < 75:
+                guardian = student.guardians.filter(is_primary=True).first()
+                if guardian:
+                    WhatsAppService.send_text_message(
+                        to_phone=guardian.phone_normalised,
+                        text=(
+                            f"⚠️ *Attendance Alert*\n\n"
+                            f"{student.get_full_name()} has an attendance rate of "
+                            f"{rate:.1f}% this term, below the required 75%.\n\n"
+                            f"Please contact the school for assistance."
+                        )
+                    )
+                NotificationService.notify_role(
+                    school=school,
+                    role='director',
+                    message=f"{student.get_full_name()} attendance is {rate:.1f}% (below 75%)",
+                    notification_type='LOW_ATTENDANCE_ALERT',
+                )
+        logger.info(f"Low attendance check done for {school.name}")
