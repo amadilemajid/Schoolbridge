@@ -2,6 +2,7 @@
 import logging
 from django.utils import timezone
 from rest_framework import viewsets, generics, status
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.serializers import Serializer, CharField, ChoiceField, UUIDField
@@ -151,3 +152,35 @@ class MessageTemplateViewSet(AuditMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         t = serializer.save(school=self.request.user.school)
         self.log_action('TEMPLATE_CREATED', t, {'type': t.template_type})
+
+
+class WhatsAppAnalyticsView(APIView):
+    """US-059: WhatsApp interaction analytics."""
+    permission_classes = [IsDirectorOrBursar]
+
+    def get(self, request):
+        from django.db.models import Count, Q
+        from messaging.models import MessageLog, InboundMessage
+
+        school = request.user.school
+        logs = MessageLog.all_objects.filter(school=school, channel='whatsapp')
+
+        total_sent = logs.filter(status__in=['sent', 'delivered', 'read']).count()
+        total_delivered = logs.filter(status='delivered').count()
+        total_read = logs.filter(status='read').count()
+        total_failed = logs.filter(status='failed').count()
+
+        by_type = logs.values('template_type').annotate(count=Count('id')).order_by('-count')
+
+        inbound = InboundMessage.objects.filter(school=school)
+        inbound_by_command = inbound.values('command').annotate(count=Count('id')).order_by('-count')
+
+        return Response({
+            'total_sent': total_sent,
+            'total_delivered': total_delivered,
+            'total_read': total_read,
+            'total_failed': total_failed,
+            'delivery_rate': round(total_delivered / total_sent * 100, 1) if total_sent else 0,
+            'by_message_type': list(by_type),
+            'inbound_commands': list(inbound_by_command),
+        })
