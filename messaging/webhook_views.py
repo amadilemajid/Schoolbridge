@@ -105,10 +105,12 @@ class WhatsAppWebhookView(View):
     def _handle_status_update(self, status_data):
         """US-039: Update MessageLog with delivery status."""
         from messaging.models import MessageLog
+        from messaging.services import WhatsAppService
         from django.utils import timezone
 
         msg_id = status_data.get('id', '')
         new_status = status_data.get('status', '')  # sent, delivered, read, failed
+        errors = status_data.get('errors', []) or []
 
         status_map = {
             'sent': 'sent',
@@ -120,10 +122,27 @@ class WhatsAppWebhookView(View):
         if not mapped or not msg_id:
             return
 
-        MessageLog.all_objects.filter(whatsapp_message_id=msg_id).update(
-            status=mapped,
-            status_updated_at=timezone.now(),
-        )
+        error_message = ''
+        if errors:
+            first_error = errors[0]
+            error_message = first_error.get('message') or first_error.get('title') or ''
+            if first_error.get('code') == 131031:
+                WhatsAppService.pause_for_lock(
+                    reason=error_message or 'Business Account locked',
+                    payload={
+                        'message_id': msg_id,
+                        'status_data': status_data,
+                    },
+                )
+
+        update_fields = {
+            'status': mapped,
+            'status_updated_at': timezone.now(),
+        }
+        if error_message:
+            update_fields['error_message'] = error_message
+
+        MessageLog.all_objects.filter(whatsapp_message_id=msg_id).update(**update_fields)
 
 
 @method_decorator(csrf_exempt, name='dispatch')

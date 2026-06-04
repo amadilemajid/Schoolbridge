@@ -9,7 +9,7 @@ class GuardianSerializer(serializers.ModelSerializer):
         model = Guardian
         fields = [
             'id', 'first_name', 'last_name', 'relationship',
-            'phone', 'email', 'is_primary', 'receives_sms',
+            'phone', 'email', 'is_primary', 'receives_sms', 'preferred_language',
         ]
 
     def validate_phone(self, value):

@@ -79,6 +79,16 @@ def notify_parent_report_ready(self, term_result_id: str):
             f"View: {pdf_url}\n"
             f"(Link valid for 30 days)"
         )
+        if WhatsAppService.is_paused():
+            WhatsAppService.queue_whatsapp_message(
+                school=result.school,
+                student=result.student,
+                recipient_phone=guardian.phone_normalised,
+                message_body=text,
+                template_type='report_card_ready',
+            )
+            logger.warning(f"WhatsApp paused; queued report card notification for {term_result_id}")
+            return
         WhatsAppService.send_text_message(to_phone=guardian.phone_normalised, text=text)
         result.parent_notified = True
         result.save(update_fields=['parent_notified'])

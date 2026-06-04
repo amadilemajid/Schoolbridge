@@ -130,11 +130,11 @@ class StudentViewSet(AuditMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], permission_classes=[IsDirectorOrBursar])
     def enrolment_report(self, request):
-        """US-015: Enrolment report by class, gender, year. PDF + Excel export."""
+        """US-015: Enrolment report by class, gender. JSON, CSV and PDF export."""
         fmt = request.query_params.get('format', 'json')
         school = request.user.school
         from django.db.models import Count, Q
-        data = (
+        data = list(
             ClassGroup.objects.filter(school=school, is_active=True)
             .annotate(
                 total=Count('current_students', filter=Q(current_students__is_active=True)),
@@ -150,7 +150,17 @@ class StudentViewSet(AuditMixin, viewsets.ModelViewSet):
         )
         if fmt == 'csv':
             return self._enrolment_csv(data)
-        return Response(list(data))
+        if fmt == 'pdf':
+            return self._enrolment_pdf(data, school)
+        # JSON: include grand totals
+        grand_total = sum(r['total'] for r in data)
+        grand_male = sum(r['male'] for r in data)
+        grand_female = sum(r['female'] for r in data)
+        return Response({
+            'school': school.name,
+            'classes': data,
+            'totals': {'total': grand_total, 'male': grand_male, 'female': grand_female},
+        })
 
     def _enrolment_csv(self, data):
         response = HttpResponse(content_type='text/csv')
@@ -159,6 +169,61 @@ class StudentViewSet(AuditMixin, viewsets.ModelViewSet):
         writer.writerow(['Class', 'Level', 'Male', 'Female', 'Total'])
         for row in data:
             writer.writerow([row['name'], row['level'], row['male'], row['female'], row['total']])
+        return response
+
+    def _enrolment_pdf(self, data, school):
+        """US-015: PDF enrolment report with school name and date stamp."""
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib import colors
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib.units import cm
+            import io
+        except ImportError:
+            return Response({'error': 'PDF generation requires reportlab. Run: pip install reportlab'}, status=500)
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4,
+                                rightMargin=1.5*cm, leftMargin=1.5*cm,
+                                topMargin=1.5*cm, bottomMargin=1.5*cm)
+        styles = getSampleStyleSheet()
+        elements = []
+
+        elements.append(Paragraph(f"<b>{school.name.upper()}</b>", styles['Title']))
+        elements.append(Paragraph("STUDENT ENROLMENT REPORT", styles['Heading2']))
+        elements.append(Paragraph(
+            f"Date: {timezone.localdate().strftime('%d %B %Y')}",
+            styles['Normal']
+        ))
+        elements.append(Spacer(1, 0.4*cm))
+
+        table_data = [['Class', 'Level', 'Male', 'Female', 'Total']]
+        grand_total = grand_male = grand_female = 0
+        for row in data:
+            table_data.append([row['name'], row['level'], row['male'], row['female'], row['total']])
+            grand_total += row['total']
+            grand_male += row['male']
+            grand_female += row['female']
+        table_data.append(['TOTAL', '', grand_male, grand_female, grand_total])
+
+        table = Table(table_data, colWidths=[5*cm, 4*cm, 3*cm, 3*cm, 3*cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.lightgrey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f0f0f0')]),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
+        ]))
+        elements.append(table)
+
+        doc.build(elements)
+        buffer.seek(0)
+        response = HttpResponse(buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="enrolment_report_{timezone.localdate()}.pdf"'
         return response
 
 

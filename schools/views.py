@@ -7,10 +7,10 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import School, AcademicYear, AcademicTerm, HolidayPeriod, SchoolMoMoConfig
+from .models import School, AcademicYear, AcademicTerm, HolidayPeriod, SchoolMoMoConfig, Timetable
 from .serializers import (
     SchoolSerializer, AcademicYearSerializer, AcademicTermSerializer,
-    HolidayPeriodSerializer, SchoolMoMoConfigSerializer,
+    HolidayPeriodSerializer, SchoolMoMoConfigSerializer, TimetableSerializer,
 )
 from .permissions import IsSystemAdmin, IsDirector, IsSchoolStaff
 from audit.mixins import AuditMixin
@@ -179,3 +179,37 @@ class DistrictBenchmarkView(APIView):
             'schools_in_district': len(district_rates),
             'above_district_average': school_rate > district_avg if district_avg else None,
         })
+
+
+class TimetableViewSet(AuditMixin, viewsets.ModelViewSet):
+    """Manage class timetable content used by parent messaging commands."""
+    serializer_class = TimetableSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [IsSchoolStaff]
+        else:
+            permission_classes = [IsDirector]
+        return [permission() for permission in permission_classes]
+
+    def get_queryset(self):
+        qs = Timetable.objects.filter(school=self.request.user.school).select_related('class_group')
+        class_id = self.request.query_params.get('class_id')
+        if class_id:
+            qs = qs.filter(class_group_id=class_id)
+        is_active = self.request.query_params.get('is_active')
+        if is_active in ['true', 'false']:
+            qs = qs.filter(is_active=(is_active == 'true'))
+        return qs
+
+    def perform_create(self, serializer):
+        obj = serializer.save(school=self.request.user.school, created_by=self.request.user)
+        self.log_action('TIMETABLE_CREATED', obj, {'class_group': obj.class_group.name})
+
+    def perform_update(self, serializer):
+        obj = serializer.save()
+        self.log_action('TIMETABLE_UPDATED', obj, {'class_group': obj.class_group.name})
+
+    def perform_destroy(self, instance):
+        self.log_action('TIMETABLE_DELETED', instance, {'class_group': instance.class_group.name})
+        super().perform_destroy(instance)

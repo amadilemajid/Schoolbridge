@@ -150,6 +150,11 @@ class Guardian(models.Model):
     is_primary = models.BooleanField(default=False,
         help_text="Primary guardian receives all automated WhatsApp messages")
     receives_sms = models.BooleanField(default=True)
+    preferred_language = models.CharField(
+        max_length=10,
+        choices=[('en', 'English'), ('lg', 'Luganda')],
+        default='en',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

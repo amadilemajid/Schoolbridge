@@ -46,9 +46,10 @@ class MessageTemplateSerializer(drf_serializers.ModelSerializer):
         model = MessageTemplate
         fields = [
             'id', 'template_type', 'name', 'language', 'body',
-            'meta_template_name', 'is_meta_approved', 'is_active',
+            'meta_template_name', 'is_meta_approved',
+            'meta_submission_status', 'meta_rejection_reason', 'is_active',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'is_meta_approved', 'meta_submission_status', 'meta_rejection_reason']
 
 
 class BroadcastViewSet(AuditMixin, viewsets.ModelViewSet):
@@ -141,6 +142,69 @@ class MessageLogListView(generics.ListAPIView):
         return qs.select_related('student')[:500]
 
 
+class BroadcastDeliveryReportView(APIView):
+    """
+    US-039: Per-broadcast delivery report.
+    Returns sent, delivered, read, failed counts with failed reason codes.
+    Data retained for 90 days per spec.
+    """
+    permission_classes = [IsDirectorOrBursar]
+
+    def get(self, request, broadcast_id):
+        from django.db.models import Count, Q
+        school = request.user.school
+        try:
+            broadcast = BroadcastMessage.objects.get(id=broadcast_id, school=school)
+        except BroadcastMessage.DoesNotExist:
+            return Response({'error': 'Broadcast not found.'}, status=404)
+
+        logs = MessageLog.objects.filter(
+            school=school,
+            template_type='broadcast',
+            created_at__gte=broadcast.created_at,
+        )
+
+        # Tighten to the broadcast window (created within 1hr of broadcast send)
+        from django.utils import timezone
+        import datetime
+        window_end = broadcast.created_at + datetime.timedelta(hours=1)
+        logs = logs.filter(created_at__lte=window_end)
+
+        counts = logs.aggregate(
+            total_sent=Count('id', filter=Q(status__in=['sent', 'delivered', 'read', 'failed'])),
+            delivered=Count('id', filter=Q(status='delivered')),
+            read=Count('id', filter=Q(status='read')),
+            failed=Count('id', filter=Q(status='failed')),
+        )
+
+        # Failed messages with reason codes (US-039)
+        failed_details = list(
+            logs.filter(status='failed')
+            .values('recipient_phone', 'error_message', 'created_at')
+            .order_by('-created_at')[:200]
+        )
+
+        return Response({
+            'broadcast_id': str(broadcast.id),
+            'broadcast_title': broadcast.title,
+            'status': broadcast.status,
+            'scheduled_at': broadcast.scheduled_at,
+            'created_at': broadcast.created_at,
+            'total_recipients': broadcast.total_recipients,
+            'sent': counts['total_sent'] or 0,
+            'delivered': counts['delivered'] or 0,
+            'read': counts['read'] or 0,
+            'failed': counts['failed'] or 0,
+            'delivery_rate_pct': round(
+                counts['delivered'] / counts['total_sent'] * 100, 1
+            ) if counts['total_sent'] else 0,
+            'read_rate_pct': round(
+                counts['read'] / counts['total_sent'] * 100, 1
+            ) if counts['total_sent'] else 0,
+            'failed_details': failed_details,
+        })
+
+
 class MessageTemplateViewSet(AuditMixin, viewsets.ModelViewSet):
     """US-040: Configurable message templates."""
     serializer_class = MessageTemplateSerializer
@@ -152,6 +216,89 @@ class MessageTemplateViewSet(AuditMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         t = serializer.save(school=self.request.user.school)
         self.log_action('TEMPLATE_CREATED', t, {'type': t.template_type})
+
+
+class TemplateSubmitToMetaView(AuditMixin, APIView):
+    """
+    US-040: Submit a MessageTemplate to Meta Business Manager for review.
+    POST /messaging/templates/{id}/submit-to-meta/
+    Idempotent — safe to resubmit a rejected template after editing.
+    """
+    permission_classes = [IsDirector]
+
+    def post(self, request, pk):
+        from messaging.services import MetaTemplateService
+        try:
+            template = MessageTemplate.objects.get(pk=pk, school=request.user.school)
+        except MessageTemplate.DoesNotExist:
+            return Response({'error': 'Template not found.'}, status=404)
+
+        if template.is_meta_approved:
+            return Response({
+                'message': 'Template is already approved by Meta.',
+                'meta_template_name': template.meta_template_name,
+            })
+
+        meta_name, success, error = MetaTemplateService.submit_template(template)
+        if not success:
+            return Response({'error': error or 'Submission failed.'}, status=400)
+
+        # Persist the meta name and mark as pending
+        template.meta_template_name = meta_name
+        template.meta_submission_status = 'PENDING'
+        template.save(update_fields=['meta_template_name', 'meta_submission_status'])
+
+        self.log_action('TEMPLATE_SUBMITTED_TO_META', template, {
+            'meta_name': meta_name,
+        })
+        return Response({
+            'message': (
+                f"Template '{meta_name}' submitted to Meta for review. "
+                f"Approval typically takes 24–48 hours. "
+                f"Use the sync endpoint to check status."
+            ),
+            'meta_template_name': meta_name,
+            'status': 'PENDING',
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class TemplateSyncStatusView(AuditMixin, APIView):
+    """
+    US-040: Poll Meta API for template approval status and sync to DB.
+    POST /messaging/templates/{id}/sync-status/
+    Also called by Celery beat daily to auto-sync all pending templates.
+    """
+    permission_classes = [IsDirector]
+
+    def post(self, request, pk):
+        from messaging.services import MetaTemplateService
+        try:
+            template = MessageTemplate.objects.get(pk=pk, school=request.user.school)
+        except MessageTemplate.DoesNotExist:
+            return Response({'error': 'Template not found.'}, status=404)
+
+        if not template.meta_template_name:
+            return Response(
+                {'error': 'Template has not been submitted to Meta yet. Use submit-to-meta first.'},
+                status=400
+            )
+
+        meta_status, is_approved = MetaTemplateService.sync_approval_status(template)
+
+        response_data = {
+            'meta_template_name': template.meta_template_name,
+            'status': meta_status,
+            'is_approved': is_approved,
+        }
+        if meta_status == 'REJECTED' and template.meta_rejection_reason:
+            response_data['rejection_reason'] = template.meta_rejection_reason
+            response_data['action'] = (
+                'Edit the template body to address Meta\'s feedback, then resubmit '
+                'via submit-to-meta. Common reasons: no variables, policy violation, '
+                'contains phone numbers or URLs in body.'
+            )
+
+        return Response(response_data)
 
 
 class WhatsAppAnalyticsView(APIView):

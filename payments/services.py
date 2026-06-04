@@ -79,6 +79,57 @@ class FeeService:
             return None
 
     @classmethod
+    def get_sibling_balance_summary(cls, student, term=None):
+        """
+        US-C02: Aggregate fee balance across all siblings.
+        Returns dict with:
+        - total_balance: sum of all siblings' balances
+        - siblings: list of {student, balance, class} for each sibling
+        - guardian: primary guardian shared across siblings
+        """
+        if term is None:
+            term = student.school.terms.filter(is_current=True).first()
+        if not term:
+            return None
+        
+        # Get all siblings including the student
+        siblings = list(student.siblings.filter(is_active=True))
+        all_students = [student] + siblings
+        
+        # Query all fee records for siblings in this term
+        fee_records = FeeRecord.all_objects.filter(
+            student__in=all_students,
+            academic_term=term
+        ).select_related('student', 'student__current_class')
+        
+        total_balance = Decimal('0')
+        sibling_data = []
+        
+        for fr in fee_records:
+            balance = fr.balance
+            total_balance += balance
+            sibling_data.append({
+                'student': fr.student,
+                'student_name': f"{fr.student.first_name} {fr.student.last_name}",
+                'class': fr.student.current_class.name if fr.student.current_class else 'N/A',
+                'balance': balance,
+                'total_amount': fr.total_amount,
+                'amount_paid': fr.amount_paid,
+                'payment_percentage': fr.payment_percentage,
+            })
+        
+        # Get shared guardian (primary guardian of first student)
+        guardian = student.guardians.filter(is_primary=True).first()
+        
+        return {
+            'total_balance': total_balance,
+            'sibling_count': len(all_students),
+            'siblings': sibling_data,
+            'guardian': guardian,
+            'term': term,
+        }
+
+    @classmethod
     def get_class_fee_summary(cls, class_group, term):
         """
         US-018: Class-level summary — fully paid, partial, zero.

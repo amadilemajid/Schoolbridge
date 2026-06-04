@@ -1,6 +1,7 @@
 """
 Automation services.
 US-063: is_school_day() — single central check for all message tasks.
+US-064: is_messaging_paused() — Director-initiated pause check.
 """
 from django.utils import timezone
 import logging
@@ -48,3 +49,42 @@ class CalendarService:
             return False
 
         return True
+
+    @staticmethod
+    def is_messaging_paused(school, date=None):
+        """
+        US-064: Returns True if the Director has set an active messaging pause
+        covering the given date. Emergency broadcasts bypass this check.
+        """
+        if date is None:
+            date = timezone.localdate()
+        from schools.models import MessagingPause
+        return MessagingPause.objects.filter(
+            school=school,
+            is_active=True,
+            start_date__lte=date,
+            end_date__gte=date,
+        ).exists()
+
+    @staticmethod
+    def record_dropped_task(school, task_type, date=None):
+        """
+        US-064: Record a task dropped during a messaging pause.
+        Called by every automated task that is suppressed by the pause.
+        """
+        if date is None:
+            date = timezone.localdate()
+        from schools.models import MessagingPause
+        pause = MessagingPause.objects.filter(
+            school=school,
+            is_active=True,
+            start_date__lte=date,
+            end_date__gte=date,
+        ).first()
+        if not pause:
+            return
+        summary = pause.dropped_tasks_summary or []
+        summary.append({'task_type': task_type, 'date': str(date)})
+        pause.dropped_tasks_count += 1
+        pause.dropped_tasks_summary = summary
+        pause.save(update_fields=['dropped_tasks_count', 'dropped_tasks_summary'])

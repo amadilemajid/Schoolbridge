@@ -11,6 +11,7 @@ from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 from django.utils import timezone
 from django.conf import settings
+from automation.services import CalendarService
 
 logger = logging.getLogger('messaging')
 
@@ -49,6 +50,19 @@ def send_payment_receipt(self, payment_id: str):
             f"Balance: UGX {balance:,}\n\n"
             f"Thank you! Reply BALANCE for full account details."
         )
+        if WhatsAppService.is_paused():
+            WhatsAppService.queue_whatsapp_message(
+                school=payment.school,
+                student=student,
+                recipient_phone=guardian.phone_normalised,
+                message_body=text,
+                template_type='payment_receipt',
+            )
+            logger.warning(f"WhatsApp paused; queued payment receipt for payment {payment_id}")
+            return
+
+        # US-064: Director-initiated pause — receipts are NOT dropped (financial comms always sent)
+        # Payment receipts bypass the Director pause as they are financial confirmations
 
         msg_id, success = WhatsAppService.send_text_message(
             to_phone=guardian.phone_normalised,
@@ -88,8 +102,6 @@ def send_whatsapp_message(self, phone: str, template: str, context: dict,
     from messaging.models import MessageLog
 
     try:
-        msg_id, success = WhatsAppService.send_text_message(to_phone=phone, text=context.get('text', ''))
-
         school = None
         student = None
         if school_id:
@@ -99,13 +111,34 @@ def send_whatsapp_message(self, phone: str, template: str, context: dict,
             from students.models import Student
             student = Student.all_objects.filter(id=student_id).first()
 
+        text = context.get('text', '')
+
+        if WhatsAppService.is_paused():
+            WhatsAppService.queue_whatsapp_message(
+                school=school,
+                student=student,
+                recipient_phone=phone,
+                message_body=text,
+                template_type=template,
+            )
+            logger.warning(f"WhatsApp paused; queued message for phone {phone}")
+            return
+
+        # US-064: Check Director-initiated pause (drops non-financial automated messages)
+        if school and CalendarService.is_messaging_paused(school):
+            CalendarService.record_dropped_task(school, template)
+            logger.info(f"Messaging paused by Director; dropped {template} to {phone}")
+            return
+
+        msg_id, success = WhatsAppService.send_text_message(to_phone=phone, text=text)
+
         log = MessageLog.all_objects.create(
             school=school,
             student=student,
             recipient_phone=phone,
             channel='whatsapp',
             template_type=template,
-            message_body=context.get('text', ''),
+            message_body=text,
             whatsapp_message_id=msg_id or '',
             status='sent' if success else 'failed',
             sent_at=timezone.now() if success else None,
@@ -186,6 +219,22 @@ def send_absence_alert(self, student_id: str, date_str: str):
             f"If this is an error, please contact the school. "
             f"Reply ABSENT {date_str} [reason] to notify us in advance next time."
         )
+        if WhatsAppService.is_paused():
+            WhatsAppService.queue_whatsapp_message(
+                school=student.school,
+                student=student,
+                recipient_phone=guardian.phone_normalised,
+                message_body=text,
+                template_type='absence_alert',
+            )
+            logger.warning(f"WhatsApp paused; queued absence alert for student {student_id}")
+            return
+
+        # US-064: Director pause check
+        if CalendarService.is_messaging_paused(student.school):
+            CalendarService.record_dropped_task(student.school, 'absence_alert')
+            logger.info(f"Messaging paused by Director; dropped absence alert for student {student_id}")
+            return
 
         msg_id, success = WhatsAppService.send_text_message(
             to_phone=guardian.phone_normalised, text=text
@@ -257,6 +306,22 @@ def send_fee_reminder(self, fee_record_id: str, days_remaining: int):
             f"Reply BALANCE for details or PLAN to request a payment plan.\n"
             f"Pay via MTN MoMo: {fr.school.momo_configs.filter(provider='mtn').first().merchant_phone if fr.school.momo_configs.filter(provider='mtn').exists() else 'Contact school'}"
         )
+        if WhatsAppService.is_paused():
+            WhatsAppService.queue_whatsapp_message(
+                school=fr.school,
+                student=fr.student,
+                recipient_phone=guardian.phone_normalised,
+                message_body=text,
+                template_type='fee_reminder',
+            )
+            logger.warning(f"WhatsApp paused; queued fee reminder for fee record {fee_record_id}")
+            return
+
+        # US-064: Director pause — fee reminders are dropped during pause
+        if CalendarService.is_messaging_paused(fr.school):
+            CalendarService.record_dropped_task(fr.school, 'fee_reminder')
+            logger.info(f"Messaging paused by Director; dropped fee reminder for {fee_record_id}")
+            return
 
         msg_id, success = WhatsAppService.send_text_message(
             to_phone=guardian.phone_normalised, text=text
@@ -310,6 +375,16 @@ def send_broadcast_chunk(self, broadcast_id: str, phone_list: list, message: str
             student_id = item.get('student_id')
             if not phone:
                 continue
+            if WhatsAppService.is_paused():
+                WhatsAppService.queue_whatsapp_message(
+                    school=broadcast.school,
+                    student=None,
+                    recipient_phone=phone,
+                    message_body=message,
+                    template_type='broadcast',
+                )
+                logger.warning(f"WhatsApp paused; queued broadcast to {phone}")
+                continue
             msg_id, success = WhatsAppService.send_text_message(to_phone=phone, text=message)
             MessageLog.all_objects.create(
                 school=broadcast.school,
@@ -361,6 +436,16 @@ def send_payment_reversal_notification(self, payment_id: str):
             f"Please contact the school for clarification.\n"
             f"Reply BALANCE to see your current balance."
         )
+        if WhatsAppService.is_paused():
+            WhatsAppService.queue_whatsapp_message(
+                school=payment.school,
+                student=student,
+                recipient_phone=guardian.phone_normalised,
+                message_body=text,
+                template_type='payment_reversal',
+            )
+            logger.warning(f"WhatsApp paused; queued reversal notice for payment {payment_id}")
+            return
         WhatsAppService.send_text_message(to_phone=guardian.phone_normalised, text=text)
     except Exception as exc:
         logger.exception(f"Reversal notification failed for {payment_id}: {exc}")

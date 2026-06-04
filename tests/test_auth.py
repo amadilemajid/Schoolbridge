@@ -73,7 +73,9 @@ class LoginLockoutTest(TestCase):
             'password': 'correct_password_123',
         }, format='json')
         self.assertEqual(response.status_code, 400)
-        self.assertIn('locked', response.data['error'].lower())
+        # DRF ValidationError surfaces under non_field_errors
+        error_text = str(response.data).lower()
+        self.assertIn('locked', error_text)
 
 
 class RolePermissionTest(TestCase):

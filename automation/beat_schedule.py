@@ -56,4 +56,26 @@ CELERYBEAT_SCHEDULE = {
         'schedule': crontab(minute='*/50'),
         'options': {'queue': 'payments'},
     },
+
+    # US-073: SSL certificate expiry check — daily at 6am EAT (03:00 UTC)
+    'ssl-certificate-check': {
+        'task': 'automation.tasks.check_ssl_certificate_expiry',
+        'schedule': crontab(hour=3, minute=0),
+        'options': {'queue': 'automation'},
+    },
+
+    # US-073: Database backup health check — daily at 7am EAT (04:00 UTC)
+    # Assumes backup runs at midnight; check at 7am gives 7hrs for backup to complete
+    'database-backup-check': {
+        'task': 'automation.tasks.check_database_backup_health',
+        'schedule': crontab(hour=4, minute=0),
+        'options': {'queue': 'automation'},
+    },
+
+    # US-040: Sync Meta template approval status — daily at 8am EAT (05:00 UTC)
+    'sync-meta-templates': {
+        'task': 'automation.tasks.sync_pending_meta_templates',
+        'schedule': crontab(hour=5, minute=0),
+        'options': {'queue': 'automation'},
+    },
 }

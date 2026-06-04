@@ -43,6 +43,8 @@ THIRD_PARTY_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_celery_beat',
+    'drf_spectacular',
+    'drf_spectacular_sidecar',
     'django_celery_results',
 ]
 LOCAL_APPS = [
@@ -119,8 +121,17 @@ AUTH_USER_MODEL = 'authentication.User'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',),
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',),
-    'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.AnonRateThrottle', 'rest_framework.throttling.UserRateThrottle'],
-    'DEFAULT_THROTTLE_RATES': {'anon': '10/min', 'user': '100/min'},
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '10/min',        # US-072: auth endpoints
+        'user': '100/min',       # US-072: general API per authenticated user
+        'webhook': '500/min',    # US-072: MoMo webhook endpoints
+        'burst': '30/min',       # Burst rate for intensive actions
+    },
     'DEFAULT_RENDERER_CLASSES': ('rest_framework.renderers.JSONRenderer',),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
@@ -128,6 +139,7 @@ REST_FRAMEWORK = {
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.URLPathVersioning',
     'DEFAULT_VERSION': 'v1',
     'ALLOWED_VERSIONS': ['v1'],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),
@@ -173,6 +185,7 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='SchoolBridge <noreply@sc
 WHATSAPP_API_URL = 'https://graph.facebook.com/v19.0'
 WHATSAPP_ACCESS_TOKEN = env('WHATSAPP_ACCESS_TOKEN', default='')
 WHATSAPP_PHONE_NUMBER_ID = env('WHATSAPP_PHONE_NUMBER_ID', default='')
+WHATSAPP_BUSINESS_ACCOUNT_ID = env('WHATSAPP_BUSINESS_ACCOUNT_ID', default='')  # US-040: WABA ID for template management
 WHATSAPP_WEBHOOK_VERIFY_TOKEN = env('WHATSAPP_WEBHOOK_VERIFY_TOKEN', default='schoolbridge_verify')
 WHATSAPP_DAILY_LIMIT = 1000
 
@@ -226,3 +239,24 @@ MTN_MOMO_API_KEY = env('MTN_MOMO_API_KEY', default='')
 MTN_MOMO_ENVIRONMENT = env('MTN_MOMO_ENVIRONMENT', default='sandbox')
 MTN_MOMO_BASE_URL = env('MTN_MOMO_BASE_URL', default='https://sandbox.momodeveloper.mtn.com')
 FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
+
+# API Documentation (US-F03)
+SPECTACULAR_SETTINGS = {
+    'SECURITY': [{'bearerAuth': []}],
+    'COMPONENTS': {
+        'securitySchemes': {
+            'bearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    },
+    'SWAGGER_UI_DIST': 'SIDECAR',
+    'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
+    'REDOC_DIST': 'SIDECAR',
+    'TITLE': 'SchoolBridge API',
+    'DESCRIPTION': 'WhatsApp-first school management platform for Ugandan schools',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}

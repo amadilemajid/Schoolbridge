@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import serializers as drf_serializers
 from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes, inline_serializer
 
 from audit.mixins import AuditMixin
 from schools.permissions import IsTeacher, IsDirector, IsDirectorOrBursar, IsSchoolStaff
@@ -30,6 +31,14 @@ class AttendanceRegisterView(AuditMixin, APIView):
               POST — submit register (7am–12pm only, locks at 12pm).
     """
     permission_classes = [IsTeacher]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('class_id', OpenApiTypes.UUID, OpenApiParameter.QUERY, required=True),
+            OpenApiParameter('date', OpenApiTypes.DATE, OpenApiParameter.QUERY, required=False),
+        ],
+        tags=['Attendance'],
+    )
 
     def get(self, request):
         class_id = request.query_params.get('class_id')
@@ -60,6 +69,18 @@ class AttendanceRegisterView(AuditMixin, APIView):
             'register_open': is_open,
             'records': serializer.data,
         })
+
+    @extend_schema(
+        request=inline_serializer(
+            name='AttendanceRegisterRequest',
+            fields={
+                'class_id': drf_serializers.CharField(),
+                'date': drf_serializers.DateField(required=False),
+                'attendance': drf_serializers.ListField(child=drf_serializers.DictField()),
+            },
+        ),
+        tags=['Attendance'],
+    )
 
     def post(self, request):
         """Submit the attendance register."""
@@ -101,6 +122,14 @@ class AttendanceRegisterView(AuditMixin, APIView):
 class AttendanceSummaryView(APIView):
     """US-050: Attendance summary and rates per student."""
     permission_classes = [IsSchoolStaff]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('student_id', OpenApiTypes.UUID, OpenApiParameter.QUERY, required=False),
+            OpenApiParameter('class_id', OpenApiTypes.UUID, OpenApiParameter.QUERY, required=False),
+        ],
+        tags=['Attendance'],
+    )
 
     def get(self, request):
         student_id = request.query_params.get('student_id')
@@ -150,6 +179,8 @@ class AttendanceVsFeesView(APIView):
     """US-053: Cross-reference attendance vs fees (from Week 4 of term)."""
     permission_classes = [IsDirectorOrBursar]
 
+    @extend_schema(tags=['Attendance'])
+
     def get(self, request):
         school = request.user.school
         term = school.terms.filter(is_current=True).first()
@@ -164,6 +195,8 @@ class AttendanceVsFeesView(APIView):
 class AttendanceReminderView(APIView):
     """US-076: Manually trigger reminder to class teachers who haven't submitted."""
     permission_classes = [IsDirector]
+
+    @extend_schema(tags=['Attendance'])
 
     def post(self, request):
         school = request.user.school

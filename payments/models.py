@@ -211,8 +211,8 @@ class Payment(models.Model):
 
 class PaymentPlan(models.Model):
     """
-    US-021: Payment plans with up to 4 instalments.
-    Each instalment has its own due date and Celery reminder.
+    US-021/US-C05: Payment plans with instalments.
+    Parent receives immediate WhatsApp confirmation and reminders on each due date.
     """
     STATUS_CHOICES = [
         ('active', 'Active'),
@@ -224,11 +224,13 @@ class PaymentPlan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     fee_record = models.OneToOneField(FeeRecord, on_delete=models.CASCADE, related_name='payment_plan')
+    student = models.ForeignKey('students.Student', on_delete=models.CASCADE, related_name='payment_plans')
     total_amount = models.DecimalField(max_digits=12, decimal_places=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey('authentication.User', on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
 
     objects = TenantManager()
     all_objects = models.Manager()
@@ -238,27 +240,33 @@ class PaymentPlan(models.Model):
 
 
 class PaymentPlanInstalment(models.Model):
-    """Individual instalment within a payment plan."""
+    """Individual instalment within a payment plan. US-C05: Automatic WhatsApp reminders on due date."""
     STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('partial', 'Partially Paid'),
         ('paid', 'Paid'),
         ('overdue', 'Overdue'),
         ('waived', 'Waived'),
     ]
 
-    plan = models.ForeignKey(PaymentPlan, on_delete=models.CASCADE, related_name='instalments')
+    payment_plan = models.ForeignKey(PaymentPlan, on_delete=models.CASCADE, related_name='instalments')
     instalment_number = models.PositiveSmallIntegerField()
-    amount = models.DecimalField(max_digits=12, decimal_places=0)
+    amount_due = models.DecimalField(max_digits=12, decimal_places=0)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=0, default=0)
     due_date = models.DateField()
-    paid_date = models.DateField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
     payment = models.ForeignKey(Payment, on_delete=models.SET_NULL, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # US-C05: Reminder tracking
+    reminder_sent = models.BooleanField(default=False)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
     reminder_task_id = models.CharField(max_length=100, blank=True,
                                          help_text="Celery task ID for scheduled reminder")
 
     class Meta:
         db_table = 'payment_plan_instalments'
-        unique_together = [('plan', 'instalment_number')]
+        unique_together = [('payment_plan', 'instalment_number')]
         ordering = ['instalment_number']
 
 
@@ -376,4 +384,11 @@ class AirtelTokenCache(models.Model):
         db_table = 'airtel_token_cache'
 
     def is_valid(self):
+        from django.utils import timezone
         return self.expires_at > timezone.now()
+
+
+# Epic-C: Smart Fee Collection Intelligence Models
+from .escalation_models import ReminderEscalation, ReminderEscalationLog
+from .payment_link_models import PaymentLink
+from .campaign_models import DefaulterCampaign, DefaulterCampaignTarget

@@ -19,6 +19,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers as drf_serializers
 
 from .models import User, PasswordHistory, PasswordResetToken
 from .serializers import (
@@ -39,6 +41,12 @@ class LoginView(AuditMixin, generics.GenericAPIView):
     serializer_class = LoginSerializer
     throttle_scope = 'anon'  # 10/min for auth endpoints (US-072)
 
+    @extend_schema(
+        request=LoginSerializer,
+        responses={200: UserSerializer},
+        tags=['Authentication'],
+    )
+
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -51,6 +59,15 @@ class LoginView(AuditMixin, generics.GenericAPIView):
 class LogoutView(AuditMixin, generics.GenericAPIView):
     """US-005: Blacklist refresh token on logout."""
     permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=inline_serializer(
+            name='LogoutRequest',
+            fields={'refresh': drf_serializers.CharField()},
+        ),
+        responses={200: inline_serializer(name='LogoutResponse', fields={'message': drf_serializers.CharField()})},
+        tags=['Authentication'],
+    )
 
     def post(self, request):
         refresh_token = request.data.get('refresh')
@@ -68,6 +85,21 @@ class LogoutView(AuditMixin, generics.GenericAPIView):
 class TokenRefreshView(generics.GenericAPIView):
     """US-005: Rotate refresh token on each use."""
     permission_classes = [AllowAny]
+
+    @extend_schema(
+        request=inline_serializer(
+            name='TokenRefreshRequest',
+            fields={'refresh': drf_serializers.CharField()},
+        ),
+        responses={200: inline_serializer(
+            name='TokenRefreshResponse',
+            fields={
+                'access': drf_serializers.CharField(),
+                'refresh': drf_serializers.CharField(),
+            },
+        )},
+        tags=['Authentication'],
+    )
 
     def post(self, request):
         refresh_token = request.data.get('refresh')

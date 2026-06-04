@@ -11,11 +11,25 @@ Write-Host "  Starting SchoolBridge Dev Stack" -ForegroundColor Cyan
 Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Activate venv check
+# Use venv only
 if (-not (Test-Path ".\venv\Scripts\python.exe")) {
-    Write-Host "ERROR: venv not found. Run .\setup_windows.ps1 first." -ForegroundColor Red
+    Write-Host "ERROR: venv not found. Create it first (python -m venv venv)." -ForegroundColor Red
     exit 1
 }
+
+$VenvDir = 'venv'
+Write-Host "Using virtual environment: venv" -ForegroundColor Green
+
+$PyExe = ".\venv\Scripts\python.exe"
+$CeleryExe = ".\venv\Scripts\celery.exe"
+
+Write-Host "Running Django system check..." -ForegroundColor Yellow
+& $PyExe manage.py check
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Django check failed. Fix issues, then run .\start_dev.ps1 again." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  Django check: OK" -ForegroundColor Green
 
 # Check Redis is reachable — if not, try to start Docker container
 Write-Host "Checking Redis..." -ForegroundColor Yellow
@@ -45,7 +59,7 @@ Write-Host "Opening service windows..." -ForegroundColor Yellow
 Start-Process powershell -ArgumentList @(
     "-NoExit",
     "-Command",
-    "Set-Location '$ProjectDir'; Write-Host 'Django Server' -ForegroundColor Cyan; .\venv\Scripts\python.exe manage.py runserver"
+    "Set-Location '$ProjectDir'; Write-Host 'Django Server' -ForegroundColor Cyan; .\$VenvDir\Scripts\python.exe manage.py runserver 8002"
 )
 
 Start-Sleep -Milliseconds 500
@@ -54,7 +68,7 @@ Start-Sleep -Milliseconds 500
 Start-Process powershell -ArgumentList @(
     "-NoExit",
     "-Command",
-    "Set-Location '$ProjectDir'; Write-Host 'Celery Worker' -ForegroundColor Cyan; .\venv\Scripts\celery.exe -A config worker -Q messaging,payments,automation -c 2 -P solo --loglevel=info"
+    "Set-Location '$ProjectDir'; Write-Host 'Celery Worker' -ForegroundColor Cyan; .\$VenvDir\Scripts\celery.exe -A config worker -Q messaging,payments,automation -c 2 -P solo --loglevel=info"
 )
 
 Start-Sleep -Milliseconds 500
@@ -63,7 +77,7 @@ Start-Sleep -Milliseconds 500
 Start-Process powershell -ArgumentList @(
     "-NoExit",
     "-Command",
-    "Set-Location '$ProjectDir'; Write-Host 'Celery Beat' -ForegroundColor Cyan; .\venv\Scripts\celery.exe -A config beat --loglevel=info"
+    "Set-Location '$ProjectDir'; Write-Host 'Celery Beat' -ForegroundColor Cyan; .\$VenvDir\Scripts\celery.exe -A config beat --loglevel=info"
 )
 
 Write-Host ""
@@ -71,8 +85,8 @@ Write-Host "=======================================" -ForegroundColor Green
 Write-Host "  All services started!" -ForegroundColor Green
 Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  API:   http://localhost:8000/api/v1/" -ForegroundColor Cyan
-Write-Host "  Admin: http://localhost:8000/admin/" -ForegroundColor Cyan
+Write-Host "  API:   http://localhost:8002/api/v1/" -ForegroundColor Cyan
+Write-Host "  Admin: http://localhost:8002/admin/" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  3 new PowerShell windows have opened:" -ForegroundColor White
 Write-Host "  - Django server" -ForegroundColor Gray

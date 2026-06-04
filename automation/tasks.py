@@ -343,6 +343,33 @@ def _send_school_daily_digest(self, school_id: str, date_str: str):
 
 
 @shared_task(bind=True)
+def sync_pending_meta_templates(self):
+    """
+    US-040: Daily poll of Meta API for all pending/unverified templates.
+    Syncs approval status and unblocks templates that have been approved.
+    Runs at 8am EAT via Celery beat.
+    """
+    from messaging.models import MessageTemplate
+    from messaging.services import MetaTemplateService
+
+    pending = MessageTemplate.objects.filter(
+        is_meta_approved=False,
+        meta_template_name__gt='',
+    ).exclude(meta_submission_status='REJECTED')
+
+    synced = approved = 0
+    for template in pending:
+        status_str, is_approved = MetaTemplateService.sync_approval_status(template)
+        synced += 1
+        if is_approved:
+            approved += 1
+
+    logger.info(
+        f"Meta template sync: checked={synced}, newly_approved={approved}"
+    )
+
+
+@shared_task(bind=True)
 def check_celery_queue_health(self):
     """
     US-073: Alert if Celery queue depth exceeds 1,000 tasks.
@@ -362,3 +389,71 @@ def check_celery_queue_health(self):
             logger.error(f"Celery queue overflow: {total_queued} tasks queued")
     except Exception as exc:
         logger.warning(f"Queue health check failed: {exc}")
+
+
+@shared_task(bind=True)
+def check_ssl_certificate_expiry(self):
+    """
+    US-073: Alert System Admin if SSL certificate expires within 30 days.
+    Runs daily via Celery beat.
+    """
+    import ssl
+    import socket
+    import datetime
+    from django.conf import settings
+
+    hosts_to_check = []
+    for host in settings.ALLOWED_HOSTS:
+        if host not in ('localhost', '127.0.0.1', '*') and '.' in host:
+            hosts_to_check.append(host)
+
+    for host in hosts_to_check:
+        try:
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(socket.socket(), server_hostname=host) as s:
+                s.settimeout(5)
+                s.connect((host, 443))
+                cert = s.getpeercert()
+            expiry_str = cert.get('notAfter', '')
+            if expiry_str:
+                expiry = datetime.datetime.strptime(expiry_str, '%b %d %H:%M:%S %Y %Z')
+                days_remaining = (expiry - datetime.datetime.utcnow()).days
+                if days_remaining <= 30:
+                    from notifications.services import send_admin_alert
+                    send_admin_alert(
+                        alert_type='SSL_CERTIFICATE_EXPIRY',
+                        message=(
+                            f'SSL certificate for {host} expires in {days_remaining} days '
+                            f'(on {expiry.strftime("%d %b %Y")}). Renew immediately.'
+                        ),
+                        payload={'host': host, 'days_remaining': days_remaining},
+                    )
+                    logger.error(f"SSL certificate for {host} expires in {days_remaining} days")
+        except Exception as exc:
+            logger.warning(f"SSL check failed for {host}: {exc}")
+
+
+@shared_task(bind=True)
+def check_database_backup_health(self):
+    """
+    US-073: Alert if the database backup has not completed successfully today.
+    Checks a sentinel key written by the backup process.
+    Works with pg_dump cron jobs or cloud-managed backups that write a heartbeat.
+    """
+    from django.core.cache import cache
+    from django.utils import timezone
+
+    today = str(timezone.localdate())
+    backup_key = f'db_backup_completed:{today}'
+
+    if not cache.get(backup_key):
+        from notifications.services import send_admin_alert
+        send_admin_alert(
+            alert_type='DATABASE_BACKUP_MISSING',
+            message=(
+                f'No database backup completion signal received for {today}. '
+                f'Check the backup process immediately.'
+            ),
+            payload={'date': today},
+        )
+        logger.error(f"Database backup not confirmed for {today}")

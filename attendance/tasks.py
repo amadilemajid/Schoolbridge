@@ -63,6 +63,21 @@ def check_low_attendance_alerts(self):
             if rate is not None and rate < 75:
                 guardian = student.guardians.filter(is_primary=True).first()
                 if guardian:
+                    if WhatsAppService.is_paused():
+                        WhatsAppService.queue_whatsapp_message(
+                            school=school,
+                            student=student,
+                            recipient_phone=guardian.phone_normalised,
+                            message_body=(
+                                f"⚠️ *Attendance Alert*\n\n"
+                                f"{student.get_full_name()} has an attendance rate of "
+                                f"{rate:.1f}% this term, below the required 75%.\n\n"
+                                f"Please contact the school for assistance."
+                            ),
+                            template_type='low_attendance_alert',
+                        )
+                        logger.warning(f"WhatsApp paused; queued low attendance alert for {student.id}")
+                        continue
                     WhatsAppService.send_text_message(
                         to_phone=guardian.phone_normalised,
                         text=(

@@ -214,3 +214,77 @@ class SchoolMoMoConfig(models.Model):
 
     def __str__(self):
         return f"{self.school.name} — {self.get_provider_display()}"
+
+
+class MessagingPause(models.Model):
+    """
+    US-064: Director-initiated pause of all automated reminders.
+    Tasks scheduled during pause period are dropped (not queued).
+    Director receives summary of dropped tasks when pause ends.
+    Emergency broadcasts bypass suppression.
+    """
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='messaging_pauses')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    reason = models.TextField(help_text='Reason for pausing, e.g. examination period')
+    is_active = models.BooleanField(default=True)
+    dropped_tasks_count = models.PositiveIntegerField(default=0)
+    dropped_tasks_summary = models.JSONField(
+        null=True, blank=True,
+        help_text='Summary of tasks dropped during pause period'
+    )
+    created_by = models.ForeignKey(
+        'authentication.User', on_delete=models.SET_NULL,
+        null=True, related_name='messaging_pauses_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'messaging_pauses'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['school', 'is_active']),
+            models.Index(fields=['school', 'start_date', 'end_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.school.name} — Pause {self.start_date} to {self.end_date}"
+
+
+class Timetable(models.Model):
+    """Class timetable content published for guardian self-service commands."""
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='timetables')
+    class_group = models.ForeignKey('students.ClassGroup', on_delete=models.CASCADE, related_name='timetables')
+    title = models.CharField(max_length=120, blank=True, default='')
+    content = models.TextField(help_text='Formatted timetable text that can be sent over WhatsApp.')
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        'authentication.User', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='timetables_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'timetables'
+        ordering = ['class_group__name', '-updated_at']
+        indexes = [
+            models.Index(fields=['school', 'is_active']),
+            models.Index(fields=['class_group', 'is_active']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.class_group and self.school_id and self.class_group.school_id != self.school_id:
+            raise ValueError('Class group must belong to the same school as the timetable.')
+        if self.is_active:
+            Timetable.objects.filter(
+                school=self.school,
+                class_group=self.class_group,
+                is_active=True,
+            ).exclude(pk=self.pk).update(is_active=False)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        title = f" - {self.title}" if self.title else ''
+        return f"{self.school.name} — {self.class_group.name}{title}"

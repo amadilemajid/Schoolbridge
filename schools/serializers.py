@@ -3,7 +3,7 @@ Schools serializers — validation for all school-level data.
 """
 from rest_framework import serializers
 from django.utils.text import slugify
-from .models import School, AcademicYear, AcademicTerm, HolidayPeriod, SchoolMoMoConfig
+from .models import School, AcademicYear, AcademicTerm, HolidayPeriod, SchoolMoMoConfig, Timetable
 
 
 class SchoolSerializer(serializers.ModelSerializer):
@@ -96,3 +96,21 @@ class SchoolMoMoConfigSerializer(serializers.ModelSerializer):
             'is_active', 'last_tested_at',
         ]
         read_only_fields = ['id', 'last_tested_at']
+
+
+class TimetableSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source='class_group.name', read_only=True)
+
+    class Meta:
+        model = Timetable
+        fields = [
+            'id', 'class_group', 'class_name', 'title', 'content',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_class_group(self, value):
+        request = self.context.get('request')
+        if request and request.user and request.user.school_id and value.school_id != request.user.school_id:
+            raise serializers.ValidationError('Class does not belong to your school.')
+        return value

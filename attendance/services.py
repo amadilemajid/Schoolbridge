@@ -69,6 +69,13 @@ class AttendanceService:
         if not CalendarService.is_school_day(class_group.school, date):
             raise ValueError("Cannot submit attendance on a non-school day.")
 
+        # Resolve current term once for all records
+        from schools.models import AcademicTerm
+        term = AcademicTerm.objects.filter(
+            school=class_group.school, is_active=True,
+            start_date__lte=date, end_date__gte=date,
+        ).first()
+
         updated_records = []
         absent_students = []
 
@@ -83,6 +90,7 @@ class AttendanceService:
                 defaults={
                     'school': class_group.school,
                     'class_group': class_group,
+                    'academic_term': term,
                     'status': status,
                     'notes': notes,
                     'marked_by': marked_by,
@@ -166,11 +174,17 @@ class AttendanceService:
     def mark_pre_excused(cls, student, absence_date, reason=''):
         """US-052: Mark a student as pre-excused from parent WhatsApp ABSENT command."""
         from attendance.models import AttendanceRecord
+        from schools.models import AcademicTerm
+        term = AcademicTerm.objects.filter(
+            school=student.school, is_active=True,
+            start_date__lte=absence_date, end_date__gte=absence_date,
+        ).first()
         record, created = AttendanceRecord.all_objects.update_or_create(
             student=student,
             date=absence_date,
             defaults={
                 'school': student.school,
+                'academic_term': term,
                 'status': 'excused',
                 'pre_excused': True,
                 'pre_excused_reason': reason,

@@ -1,0 +1,249 @@
+
+SchoolBridge
+Technical Design Document v2.0
+WhatsApp-First School Operations & Revenue Automation Platform
+
+Version2.0 — Full Strategic EditionDate2025StatusInternal — Pilot ReadyAudienceTechnical team, investors, school directorsCountryUganda (East Africa expansion planned)
+CONFIDENTIAL
+
+
+1. Executive Summary
+SchoolBridge is a WhatsApp-first school operations and revenue automation platform purpose-built for Ugandan schools. It addresses the most painful daily problems school administrators, bursars, teachers, and directors face: delayed fee collection, poor parent communication, manual academic reporting, and fragmented payment reconciliation.
+Unlike generic school management software imported from abroad, SchoolBridge is designed from the ground up for the Ugandan school operating environment — integrating with MTN Mobile Money and Airtel Money, supporting UNEB examination report formats, operating reliably on low-bandwidth connections, and communicating with parents through WhatsApp, the platform they already use daily.
+
+Strategic Positioning
+SchoolBridge is not a school management system. It is a school operations, communication, and revenue automation platform. Every feature is designed to either save administrator time, increase fee collection rates, or strengthen the school-parent relationship.
+The platform targets Uganda's 20,000+ registered primary and secondary schools, the majority of which still manage fees manually, send paper report cards, and communicate with parents through unreliable individual phone calls.
+
+MetricCurrent (Manual)With SchoolBridgeFee collection rate45 – 65%80 – 95%Parent communicationAd hoc phone callsAutomated WhatsAppReport card generation3 – 5 days manuallyUnder 30 minutesAdmin time on fee tracking15 – 20 hrs/weekUnder 3 hrs/weekPayment reconciliationManual, error-proneAutomated + audited
+2. Problem Statement
+Uganda's school sector is large, growing, and chronically underserved by technology. The problems are systemic and well-documented:
+2.1 Fee Collection Crisis
+The average Ugandan school collects only 50–65% of expected fees per term. The root causes include:
+• No automated reminder system — bursars rely on handwritten lists and verbal reminders
+• No easy payment channel — parents must travel to school or send cash with children
+• No real-time visibility — administrators cannot see who has paid at a glance
+• No payment plans — parents with partial ability to pay are treated the same as non-payers
+
+Financial Impact
+A school with 500 students at UGX 400,000 per term expects UGX 200,000,000. At 60% collection, it actually receives UGX 120,000,000 — a UGX 80,000,000 shortfall every term. SchoolBridge targets a collection rate above 85%, recovering UGX 50,000,000+ per term for a school of this size.
+2.2 Parent Communication Breakdown
+• Schools have no reliable broadcast channel — announcements are sent via children or handwritten notes
+• Parents have no visibility into academic performance between term report cards
+• Fee balance inquiries require a physical visit to the school office
+• Emergency alerts cannot reach all parents reliably
+2.3 Academic Reporting Inefficiency
+• Teachers enter marks in multiple registers and notebooks
+• Report cards are handwritten or typed individually — a process taking 3–5 days per class
+• No standardised digital record of academic performance over time
+• UNEB-format reports (P7, UCE, UACE) require manual reformatting every term
+2.4 Administrative Fragmentation
+• Student enrolment data lives in physical registers
+• Payment records are in separate ledgers from student records
+• No single dashboard for school leadership to view operations
+• Audit trails are non-existent — fraud and errors go undetected
+
+3. Strategic Positioning & Competitive Moats
+SchoolBridge is intentionally positioned not as a generic school management system, but as a revenue automation and operations platform. This framing speaks directly to what school directors and boards care about most: financial sustainability.
+3.1 The Four Competitive Moats
+
+MoatDescriptionWhy competitors cannot copy itData MoatAggregated anonymised fee collection rates, term performance, and payment behaviour across all schools on the platformRequires years of real school data; no competitor starts with thisNetwork MoatSchools in the same district share term calendars, exam schedules, and UNEB benchmarks. Leaving SchoolBridge means losing access to this network.Network value compounds with each new school enrolledInstitutional MoatOfficial partnerships with diocese networks, school associations, and district education offices. One endorsement covers dozens to hundreds of schools.Relationship-driven; cannot be replicated with technology aloneSwitching Cost MoatAfter two terms, a school's full fee history, parent contact database, student academic records, and audit trail live inside SchoolBridge. Migration is extremely disruptive.Data lock-in is legitimate here because we provide genuine, measurable value
+3.2 Uganda-Specific Differentiation
+This is SchoolBridge's most powerful and defensible advantage: deep local specificity that foreign SaaS products cannot replicate.
+• UNEB format report cards — P7, UCE (S4), and UACE (S6) formats built in. Schools are legally required to issue these formats.
+• MTN Mobile Money and Airtel Money — the two dominant payment rails in Uganda, integrated natively
+• WhatsApp-first communication — Uganda's most widely used messaging platform, requiring no app installation from parents
+• SMS fallback — automated SMS when WhatsApp delivery fails, essential for low-connectivity areas
+• Low-bandwidth mode — admin portal functions on 2G/3G connections with offline caching
+• Uganda Shilling natively — no currency conversion, no foreign payment processor friction
+
+4. Core System Architecture
+SchoolBridge uses a hybrid cloud architecture optimised for reliability, low-latency, and graceful degradation in low-connectivity environments. The system is composed of five major layers:
+
+LayerComponentsPurposePresentationReact + TailwindCSS Admin Portal; WhatsApp Business API InterfaceUser-facing UI for staff; WhatsApp for parentsAPI LayerDjango REST Framework, JWT Authentication, Role-Based Access ControlBusiness logic, auth, data validationAutomation EngineCelery task queue, Redis broker, cron-based schedulerAutomated reminders, reconciliation, reportingIntegration LayerMTN MoMo API, Airtel Money API, WhatsApp Business API, Africa's Talking SMSPayments, messaging, fallback SMSData LayerPostgreSQL 16 (primary), Redis 7 (cache/queue), AWS S3 (file storage)Persistent data, caching, documents
+4.1 Multi-Tenancy Model
+SchoolBridge is a multi-tenant SaaS platform. Each school is an isolated tenant with its own data namespace, user roles, and configuration. Data isolation is enforced at the database row level using a school_id foreign key on all school-specific tables, with Django middleware validating tenant context on every request.
+• Single shared schema with row-level isolation — cost-efficient and performant
+• Each school's data is logically separated and never visible to other schools
+• Super-admin accounts can access any tenant for support with a full audit trail
+4.2 Offline and Low-Bandwidth Strategy
+Critical Design Requirement
+Uganda's internet connectivity is unreliable outside major urban centres. SchoolBridge must function usefully when the internet is slow or unavailable. This is not an optional enhancement — it is a core product requirement.
+• Progressive Web App (PWA) with service worker for offline caching of the admin portal
+• Critical read operations (student list, fee balances, attendance) available offline using IndexedDB
+• Write operations queued locally and synced when connectivity resumes
+• WhatsApp delivery failures automatically trigger SMS fallback within 2 minutes
+• API responses compressed with gzip; images lazy-loaded and compressed
+
+5. System Modules — Detailed Specification
+5.1 Admin Web Portal
+The web portal is the primary operational interface for school staff, accessible via any modern browser on desktop, tablet, or smartphone. User roles determine which modules are visible and what actions are permitted.
+
+RolePermissionsDirectorFull access to all modules, analytics, financial reports, staff management, system settingsBursarFee management, payment recording, payment plans, financial reporting, receipts, Mobile Money reconciliationTeacherMarks entry for assigned classes/subjects, attendance recording, view own class report cardsRegistrarStudent enrolment, profile management, class assignments, parent contact managementAdminAll of the above except financial reports and system settings
+Student Management Module
+• Student profiles: name, date of birth, gender, class, stream, photo, parent contacts
+• Enrolment, transfer, graduation, and withdrawal workflows
+• Bulk import via CSV from existing manual registers
+• Class and stream management with year-end promotion automation
+• Search and filter by name, class, fee status, and academic performance
+Attendance Module
+• Daily class attendance recorded by teacher on mobile or desktop
+• Automated WhatsApp/SMS alert to parent when student is absent without excuse
+• Weekly attendance summary reports per class
+• Attendance rate tracking with alerts when a student falls below configurable threshold
+
+5.2 Fee Management & Collection Module
+This is the highest-value module and the primary driver of adoption. It automates the entire fee lifecycle from invoicing to reconciliation.
+Fee Structure Configuration
+• Configurable fee items per class level: tuition, lunch, transport, development, examination fees
+• Term-based fee schedules (Term 1, 2, 3) with due dates
+• Sibling discounts, scholarship deductions, and bursary flags
+• Payment plans: define instalment schedules for families with confirmed partial payment arrangements
+Payment Recording
+• Manual cash payment recording by bursar with auto-generated receipt
+• Automatic recording of Mobile Money payments via API webhook — no manual entry
+• Each payment linked to a student account with timestamp, amount, channel, and operator reference
+• Overpayments automatically flagged and credited to next term
+Outstanding Balance Tracking
+• Real-time fee balance dashboard: paid, pending, overdue, per student and per class
+• Director/bursar sees school-wide collection rate at a glance on login
+• Ageing analysis: balances overdue by 0–7 days, 7–30 days, 30+ days
+• One-click export to PDF or Excel for board reporting
+Automated Reminders
+• Fee due date reminder: sent 7 days and 1 day before each payment deadline
+• Overdue reminder: sent at 3 days, 7 days, and 14 days after due date
+• Custom message templates configurable per school in English, Luganda, or other local languages
+• Reminders sent via WhatsApp with SMS fallback; delivery status tracked
+
+Two-Way Parent Interaction
+Parents can send WhatsApp messages to the school's SchoolBridge number to self-serve basic requests:  BALANCE — returns current fee balance for their child  RECEIPT — sends the last payment receipt as a PDF  REPORT — sends the most recent term report card  HELP — returns a menu of available commands  This two-way functionality is a key differentiator from broadcast-only systems and dramatically reduces bursar workload.
+5.3 Mobile Money Integration
+SchoolBridge integrates with both MTN Mobile Money Uganda and Airtel Money Uganda via their respective APIs to enable parents to pay school fees from their mobile wallets without visiting the school.
+Payment Flow
+1. Parent receives WhatsApp reminder with unique student payment reference code
+2. Parent dials *165# (MTN) or *185# (Airtel), selects Pay Bill, enters SchoolBridge merchant code and student payment reference
+3. Mobile money operator processes payment and sends webhook notification to SchoolBridge API
+4. SchoolBridge automatically credits the student fee account, generates a receipt, and sends WhatsApp confirmation to parent
+5. Payment appears on bursar dashboard in real time — no manual entry required
+
+FeatureMTN MoMoAirtel MoneyAPI TypeMTN MoMo Open API (v1)Airtel Africa APIPayment directionCustomer to Business (C2B)Customer to Business (C2B)Webhook supportYesYesSettlementT+1 bank settlementT+1 bank settlementTransaction fee~1% (operator-side)~1% (operator-side)
+5.4 WhatsApp Communication Layer
+The WhatsApp layer is the primary communication channel between the school and parents. It requires a WhatsApp Business API account registered to the school or SchoolBridge on behalf of the school.
+Outbound Message Types
+Message TypeTriggerFormatFee reminder7 days before due date; 1 day before; 3/7/14 days overdueTemplate message with balance and payment instructionsPayment confirmationImmediate on Mobile Money webhook receiptReceipt summary with new balanceAbsence alertSame day when student marked absentStudent name, date, school contactReport cardEnd of term on director approvalPDF attachment or formatted messageGeneral announcementManual broadcast by adminFree-form text or approved templateExam timetableScheduled by adminFormatted schedule
+WhatsApp Business API Requirements
+• A verified WhatsApp Business account registered to the school or SchoolBridge on behalf of the school
+• Meta-approved message templates for all automated outbound messages
+• 24-hour conversation window for free-form replies after a parent initiates contact
+• Webhook endpoint on SchoolBridge backend to receive inbound messages and delivery receipts
+
+5.5 Academic Module
+The academic module digitises marks collection, grading, and report card generation with Uganda-specific standards built in.
+Marks Entry
+• Teachers access their class and subject marks entry form from any device
+• Configurable assessment components: mid-term test, end-of-term exam, continuous assessment, practicals
+• Marks saved immediately; no submit required — reduces data loss on connectivity drops
+• Deputy head teacher or director can view marks entry progress per teacher in real time
+Automated Grade Computation
+• Totals, weighted averages, and final grades computed automatically on marks entry
+• Grading scales configurable: Uganda national scale (D1–F9), percentage, or custom letter grades
+• Class ranking and stream ranking computed per subject and overall
+• Division computation for S4 and S6 following UNEB aggregation rules
+UNEB-Format Report Cards
+Uganda-Specific Advantage
+SchoolBridge generates report cards in the exact formats required by the Uganda National Examinations Board for P7, UCE (S4), and UACE (S6) candidates. No foreign school management software offers this. It is the single most requested feature from Ugandan secondary school administrators.
+• Primary leaving (P7) report card with all required UNEB fields
+• UCE (O-Level) internal mock report in UNEB aggregate format
+• UACE (A-Level) internal assessment report with principal and subsidiary pass/fail
+• Internal primary/secondary report cards in configurable school-branded format
+• Bulk PDF generation — all report cards for a class or entire school in one click
+• Digital delivery via WhatsApp to parent + print-ready PDF for school records
+
+5.6 Automation Engine
+The automation engine is SchoolBridge's most significant operational differentiator. It runs on a Celery task queue backed by Redis, executing scheduled and event-driven tasks that replace hours of manual administrative work.
+Scheduled Automations
+AutomationScheduleOutputFee due reminders7 days before, 1 day before fee deadlineWhatsApp/SMS to parents with outstanding balanceOverdue fee escalation3, 7, 14 days after due dateEscalating reminder messages to parentsDaily attendance alertsBy 10 AM on school daysWhatsApp to parents of absent studentsMoMo reconciliationDaily at 11 PMReconciliation report to bursar; flag discrepanciesWeekly collection reportEvery Monday morningPDF summary sent to directorTerm report generationOn director approval triggerBulk PDF report cards for all students
+Event-Driven Automations
+• On Mobile Money payment received: credit student account + send receipt to parent
+• On student marked absent: trigger parent alert within 30 minutes
+• On new student enrolled: send welcome WhatsApp to parent with school contact and payment information
+• On fee payment plan approval: schedule instalment reminders for each agreed date
+
+6. Technology Stack
+
+LayerTechnologyRationaleFrontendReact 18 + TailwindCSS + ViteFast development, excellent mobile responsiveness, PWA supportBackendPython 3.12 + Django 5 + Django REST FrameworkMature ecosystem, strong ORM, excellent for SaaS multi-tenancyTask QueueCelery 5 + Redis 7Reliable async task execution; Redis doubles as cache layerDatabasePostgreSQL 16ACID compliance, JSON fields for flexible config, proven at scaleFile StorageAWS S3 or DigitalOcean SpacesReport card PDFs, receipts, student documentsHostingAWS / DigitalOcean / HetznerHetzner for cost efficiency; AWS/DO for managed services at scaleWhatsAppWhatsApp Business API via Africa's Talking or TwilioAfrica's Talking has local Uganda support and UGX billingSMS FallbackAfrica's Talking SMSLocal Uganda coverage; competitive bulk ratesPDF GenerationWeasyPrint or Playwright (headless)High-fidelity report card PDF rendering from HTML templatesAuthenticationJWT via djangorestframework-simplejwtStateless auth suitable for SPA and mobileCI/CDGitHub Actions + DockerReproducible builds; zero-downtime deployments
+7. Security & Compliance
+SchoolBridge handles sensitive financial data, student academic records, and parent personal information. Security is a non-negotiable foundational requirement, not an afterthought.
+7.1 Application Security
+• JWT authentication with short-lived access tokens (15 minutes) and secure refresh tokens (7 days)
+• Role-based access control (RBAC) enforced at API middleware level — not just the UI
+• Input validation and sanitisation on all user-submitted data using DRF serializers
+• CSRF protection on all state-changing requests
+• SQL injection prevention through Django ORM parameterised queries (no raw SQL)
+• XSS prevention through React's DOM escaping and Content Security Policy headers
+7.2 Data Security
+• All data encrypted in transit (TLS 1.3) — HTTPS enforced with HSTS
+• Database encrypted at rest using cloud provider volume encryption (AES-256)
+• Passwords hashed using Argon2
+• Mobile Money API credentials stored in environment variables, never in source code
+• Automated daily database backups with 30-day retention and point-in-time recovery
+• Audit log on all administrative actions: who did what, when, from which IP
+7.3 Regulatory Compliance
+Compliance Requirements
+SchoolBridge operates in compliance with:  Uganda Data Protection and Privacy Act 2019 (PDPA)  Bank of Uganda guidelines on mobile money payment services  Uganda Communications Commission (UCC) regulations for bulk messaging  Meta WhatsApp Business Terms of Service and Commerce Policy
+• Parent data used only for school communication — never sold or shared with third parties
+• Data retention policy: student records retained 7 years post-graduation; deleted on school request after exit
+
+8. Revenue Model
+SchoolBridge generates revenue through a combination of subscription, transaction, and service fees. The model is designed to align SchoolBridge's revenue with school success — we earn more when schools collect more.
+
+Revenue StreamPricingWhenPer School Avg.Monthly subscriptionUGX 150,000 – 400,000 / month based on student countMonthlyUGX 250,000MoMo transaction fee0.5% of fees processed via platformPer transactionUGX 100,000+/termSetup & onboardingUGX 200,000 – 500,000 one-timeAt sign-upUGX 300,000SMS bundle top-upUGX 50,000 per 1,000 messagesAs consumedUGX 30,000/monthTerm data insights reportUGX 100,000 per school per termEnd of termUGX 300,000/year
+Revenue Projections
+StageSchoolsMonthly MRRAnnual ARRPilot (Month 1–3)5UGX 1.25MUGX 15MEarly Growth (Month 4–9)25UGX 6.25MUGX 75MScale (Month 10–18)100UGX 25MUGX 300MMarket Leader (Year 3)500UGX 125MUGX 1.5B (~$400K USD)
+Pricing Philosophy
+For schools hesitant to commit to a monthly subscription, SchoolBridge offers a fee-success pricing option: no monthly subscription, only 1.5% of fees collected via the platform. This removes the biggest objection and aligns SchoolBridge revenue directly with school collection success. Schools switch to subscription pricing once value is proven.
+9. MVP Scope & Pilot Deployment Plan
+The MVP focuses on the highest-value, lowest-complexity features that demonstrate the platform's core value proposition to school directors within the first week of use.
+9.1 MVP Feature Set (Phase 1 — Months 1–3)
+FeaturePrioritySuccess MetricStudent management and profilesP0 — RequiredAll students enrolled in systemFee structure configurationP0 — RequiredTerm fees entered and activeFee balance dashboardP0 — RequiredReal-time collection rate visibleManual payment recording + receiptP0 — RequiredAll cash payments recorded digitallyWhatsApp fee reminders (outbound)P0 — RequiredFirst automated reminder sent to 80%+ parentsMTN MoMo payment integrationP1 — HighFirst MoMo payment auto-reconciledAirtel Money integrationP1 — HighBoth payment rails activeTwo-way WhatsApp (BALANCE command)P1 — HighParents can self-serve balance queriesMarks entry and report card generationP2 — MediumEnd-of-term reports generated digitallyAttendance and absence alertsP2 — MediumDaily alerts sent for absences
+9.2 Pilot Success Criteria
+The pilot with 3–5 schools will be declared successful when all three of the following metrics are achieved:
+• Fee collection rate: equal to or greater than 85% of expected fees for the term
+• Parent WhatsApp engagement: equal to or greater than 60% of parents have received and read at least one message
+• Administrator time saved: equal to or greater than 5 hours per week reported by bursar or administrator
+These three metrics become the core of the SchoolBridge sales pitch to all subsequent schools.
+9.3 Pilot Rollout Steps
+6. Select 3–5 schools with 200–800 students, mix of primary and secondary, Kampala and peri-urban
+7. Two-day onboarding: data migration from existing registers, staff training, WhatsApp Business account setup
+8. Week 1–2: manual payment recording only, staff familiarisation with the dashboard
+9. Week 3: activate WhatsApp reminders, first automated message broadcast
+10. Week 4–6: activate Mobile Money integration, first automated reconciliation
+11. End of term: generate first digital report cards, measure all three success metrics
+12. Debrief with school directors, collect testimonials, refine based on feedback
+
+10. Product Roadmap
+
+PhaseTimelineDeliverablesPhase 1Months 1–3MVP: student management, fee tracking, manual payments, WhatsApp outbound reminders, basic reportingPhase 2Months 4–6MTN + Airtel MoMo integration, two-way WhatsApp, marks entry, automated reconciliation, attendance modulePhase 3Months 7–9UNEB-format report cards (P7/S4/S6), SMS fallback, offline PWA mode, payment plans, analytics dashboardPhase 4Months 10–15School network features (district benchmarks, shared calendars), data insights reports, multi-school director view, React Native mobile appPhase 5Months 16–24Institutional partnerships (diocese, district offices), East Africa expansion (Kenya, Tanzania), third-party integrations API
+11. Risk Register & Mitigation
+
+RiskLevelMitigationMTN/Airtel API changes or downtimeHIGHDual operator integration provides failover. Monitor API status. Maintain relationship with operator partner managers.WhatsApp Business API policy changesMEDIUMSMS fallback is always active. Do not depend on WhatsApp for critical payment workflows.School director resistance to changeHIGHFrame everything around revenue recovery. Lead with fee collection rate improvement, not technology features.Low-quality internet at schoolsHIGHOffline PWA mode, compressed API responses, progressive loading. Tested on 2G connections before launch.Data privacy concerns from parentsMEDIUMClear privacy notice in onboarding. Data only used for school communication. PDPA-compliant.Competitor entry (local or foreign SaaS)MEDIUMExecute on four moats: data, network, institutional, switching cost. Move fast on UNEB integration as primary differentiator.Key personnel risk (small founding team)MEDIUMThorough documentation. CI/CD automation reduces single-person dependencies. Hire second developer by Month 4.
+12. Implementation Team Requirements
+The following roles are required to execute the MVP and pilot phases. Roles can be combined in the founding team.
+
+RoleResponsibilitiesStart PhaseFull-stack Developer (Lead)Django backend, React frontend, API integrations, DevOps, CI/CD pipelineDay 1Full-stack Developer (2nd)Mobile Money integration, WhatsApp layer, automation engine, mobile appMonth 3–4School Relationship ManagerPilot school acquisition, onboarding, staff training, ongoing supportMonth 2Product / FounderProduct decisions, school sales, investor relations, institutional partnershipsDay 1
+Appendix A — Core Data Model
+The following are the core database entities and their key fields. Full ERD available on request from the engineering team.
+
+EntityKey FieldsSchoolid, name, address, phone, logo, whatsapp_number, momo_merchant_code, created_atStudentid, school_id, first_name, last_name, dob, gender, class_id, stream, enrolment_date, statusParentid, student_id, name, phone, whatsapp_number, relationship, is_primary_contactFeeStructureid, school_id, class_level, term, academic_year, items (JSON), due_date, created_atFeeAccountid, student_id, term, expected_amount, paid_amount, balance, status, updated_atPaymentid, fee_account_id, amount, channel (cash/mtn/airtel), reference, operator_ref, recorded_by, timestampAcademicRecordid, student_id, term, subject_id, component_scores (JSON), total, grade, rank, updated_atMessageid, school_id, recipient_phone, channel, type, content, status, sent_at, delivered_atAuditLogid, school_id, user_id, action, entity_type, entity_id, before (JSON), after (JSON), ip, timestamp
+Appendix B — API Integration Summary
+
+IntegrationProviderAuth MethodKey EndpointsMTN Mobile MoneyMTN Uganda Open APIOAuth 2.0 + API Key/collection, /disbursements, /webhookAirtel MoneyAirtel Africa APIOAuth 2.0/merchant/v1/payments, /webhookWhatsApp BusinessMeta / Africa's TalkingBearer Token/messages, /webhooks, /templatesSMS FallbackAfrica's Talking SMSAPI Key/messaging, /delivery-reports
+Document Control
+
+Document titleSchoolBridge Technical Design Document v2.0OwnerSchoolBridge Product TeamClassificationConfidential — Internal and Investor Use OnlyNext reviewAfter pilot completion (approximately Month 4)Contactschoolbridge.ug  |  info@schoolbridge.ug
+A Note on This Document
+This document reflects the full strategic and technical vision for SchoolBridge. Individual sections will be expanded into separate engineering specifications as the team grows. The goal of this document is to give school directors, investors, and technical partners a complete, honest picture of what SchoolBridge is, how it works, and why it will succeed.
+SchoolBridge  |  Technical Design Document v2.0	Confidential 2025
+
+Confidential — SchoolBridge Uganda, 2025	schoolbridge.ug
+

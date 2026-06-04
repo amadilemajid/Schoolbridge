@@ -10,6 +10,7 @@ from django.http import JsonResponse
 from django.views import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -54,6 +55,8 @@ class HealthCheckView(View):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', HealthCheckView.as_view(), name='health-check'),
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 
     # Versioned API — all client-facing endpoints
     path('api/v1/', include([

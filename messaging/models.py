@@ -37,10 +37,14 @@ class MessageTemplate(models.Model):
     language = models.CharField(max_length=10, default='en',
                                 choices=[('en', 'English'), ('lg', 'Luganda')])
     body = models.TextField(help_text="Template body with {{variable}} placeholders")
-    meta_template_name = models.CharField(max_length=100, blank=True,
+    meta_template_name = models.CharField(max_length=512, blank=True,
         help_text="Exact name registered in Meta Business Manager")
     is_meta_approved = models.BooleanField(default=False,
         help_text="MUST be True before template is used in automated sends")
+    meta_submission_status = models.CharField(max_length=30, blank=True,
+        help_text="Meta review status: PENDING, APPROVED, REJECTED, PAUSED, DISABLED")
+    meta_rejection_reason = models.TextField(blank=True,
+        help_text="Reason provided by Meta if template is rejected")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

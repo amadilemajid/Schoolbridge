@@ -3,11 +3,26 @@ pytest configuration for SchoolBridge.
 Global fixtures available in all tests.
 """
 import pytest
+from django.test import override_settings
 from django.contrib.auth import get_user_model
 from schools.models import School, AcademicYear, AcademicTerm
 from students.models import ClassGroup
 
 User = get_user_model()
+
+# Disable throttling globally for all tests — prevents 429s from
+# interfering with lockout and role-permission test sequences.
+pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture(autouse=True)
+def disable_throttling(settings):
+    """Remove all throttle classes so tests never hit 429."""
+    settings.REST_FRAMEWORK = {
+        **settings.REST_FRAMEWORK,
+        'DEFAULT_THROTTLE_CLASSES': [],
+        'DEFAULT_THROTTLE_RATES': {},
+    }
 
 
 @pytest.fixture
