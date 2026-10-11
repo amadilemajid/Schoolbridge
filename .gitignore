@@ -57,3 +57,10 @@ build/
 
 # Logs
 logs/*.log
+
+# Scratch and temporary investigation files
+scratch/
+check_db.py
+inspect_anita.py
+schema.json
+schema_paths.txt

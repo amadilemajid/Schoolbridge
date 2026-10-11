@@ -70,17 +70,26 @@ def process_daily_instalment_reminders():
 @shared_task
 def check_overdue_instalments():
     """
-    Check for overdue instalments and send escalated reminders.
+    Check for overdue instalments, calculate risk scores, send escalated reminders,
+    and trigger Director alerts for high-risk accounts.
     Runs daily at 10:00 AM via Celery beat.
     """
     from payments.instalment_service import InstalmentPlanService
+    from payments.instalment_intelligence import InstalmentIntelligenceService
     from payments.models import PaymentPlanInstalment
     
     overdue = InstalmentPlanService.get_overdue_instalments()
     
-    # Send escalated reminders for overdue instalments
     count = 0
+    escalated_plans = set()
     for instalment in overdue:
+        plan = instalment.payment_plan
+        
+        # Check risk score & escalate to Director if needed
+        if plan.id not in escalated_plans:
+            InstalmentIntelligenceService.check_and_escalate_to_director(plan)
+            escalated_plans.add(plan.id)
+
         # Only send if last reminder was more than 2 days ago
         if instalment.reminder_sent_at:
             days_since = (timezone.now() - instalment.reminder_sent_at).days
@@ -95,5 +104,6 @@ def check_overdue_instalments():
         send_instalment_reminder.delay(str(instalment.id))
         count += 1
     
-    logger.info(f"Queued {count} overdue instalment reminders")
+    logger.info(f"Queued {count} overdue instalment reminders across {len(escalated_plans)} plans")
     return {'overdue_count': overdue.count(), 'reminders_sent': count}
+

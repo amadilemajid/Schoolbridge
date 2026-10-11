@@ -20,14 +20,15 @@ def generate_single_report_card(self, term_result_id: str, level: str):
         ).get(id=term_result_id)
 
         # Pick correct report card generator based on class level
-        level_upper = level.upper()
+        level_upper = (level or '').upper().strip()
         if 'P7' in level_upper or level_upper == 'P7':
             buffer, division, aggregate = ReportCardService.generate_ple_report_card(result)
         elif 'S4' in level_upper or level_upper == 'S4':
             buffer, division, aggregate = ReportCardService.generate_uce_report_card(result)
         else:
-            # Generic report card for other levels
-            buffer, division, aggregate = ReportCardService.generate_ple_report_card(result)
+            # Generic report card for P1–P6, S1–S3, S5–S6, and any other level (US-045)
+            buffer, division, aggregate = ReportCardService.generate_generic_report_card(result)
+
 
         pdf_filename = f"report_card_{result.student.student_id}_{result.academic_term_id}.pdf"
         result.report_card_pdf.save(pdf_filename, ContentFile(buffer.read()), save=False)
@@ -94,6 +95,24 @@ def notify_parent_report_ready(self, term_result_id: str):
         result.save(update_fields=['parent_notified'])
     except Exception as exc:
         logger.exception(f"notify_parent_report_ready failed for {term_result_id}: {exc}")
+        try:
+            self.retry(exc=exc)
+        except MaxRetriesExceededError:
+            pass
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+def recompute_term_results_task(self, assessment_id: str):
+    """Asynchronously recompute term results after marks entry."""
+    from results.models import Assessment
+    from results.services import MarksService
+
+    try:
+        assessment = Assessment.all_objects.get(id=assessment_id)
+        MarksService._recompute_term_results(assessment)
+        logger.info(f"Asynchronously recomputed term results for assessment {assessment_id}")
+    except Exception as exc:
+        logger.exception(f"recompute_term_results_task failed for {assessment_id}: {exc}")
         try:
             self.retry(exc=exc)
         except MaxRetriesExceededError:

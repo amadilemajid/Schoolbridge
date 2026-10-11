@@ -21,6 +21,7 @@ REQUIRED_CSV_COLUMNS = {
 }
 
 OPTIONAL_CSV_COLUMNS = {
+    'admission_number', 'student_id', 'admission_no',
     'other_names', 'date_of_birth', 'class_name',
     'guardian2_name', 'guardian2_phone', 'guardian2_relationship',
 }
@@ -79,12 +80,60 @@ class StudentImportService:
             raise ValueError(f"CSV missing required columns: {missing}")
 
     def _process_rows(self, df):
+        """
+        Process CSV rows with performance optimisations:
+        - ClassGroup lookup cache avoids N DB queries per row
+        - ID pre-allocation avoids locking School row for every single insert
+        """
+        # Cache all ClassGroups for this school in memory (1 query vs N queries)
+        self._class_cache = {
+            cg.name.lower(): cg
+            for cg in ClassGroup.all_objects.filter(school=self.school)
+        }
+
+        # Pre-allocate the entire sequence of student IDs (1 DB lock vs N locks)
+        total_rows = len(df)
+        self._id_counter, self._id_prefix = self._preallocate_student_ids(total_rows)
+
         for idx, row in df.iterrows():
             row_num = idx + 2  # 1-indexed, header is row 1
             try:
                 self._import_row(row, row_num)
             except Exception as e:
                 self.errors.append({'row': row_num, 'data': row.to_dict(), 'errors': str(e)})
+
+    def _preallocate_student_ids(self, count):
+        """
+        Pre-allocate `count` student IDs by acquiring a single School lock,
+        determining the starting sequence number, and returning it.
+        Subsequent calls in _import_row use an in-memory counter.
+        """
+        from django.utils import timezone
+        from schools.models import School as SchoolModel
+
+        with transaction.atomic():
+            locked_school = SchoolModel.objects.select_for_update().get(pk=self.school.pk)
+            year = timezone.now().year
+            prefix = f"SCH-{year}-"
+            last = (
+                Student.all_objects
+                .filter(school=locked_school, student_id__startswith=prefix)
+                .order_by('-student_id').first()
+            )
+            if last:
+                try:
+                    start = int(last.student_id.split('-')[-1]) + 1
+                except (ValueError, IndexError):
+                    start = 1
+            else:
+                start = 1
+        return start, prefix
+
+    def _next_student_id(self):
+        """Return next pre-allocated student ID from in-memory counter."""
+        sid = f"{self._id_prefix}{self._id_counter:04d}"
+        self._id_counter += 1
+        return sid
 
     @transaction.atomic
     def _import_row(self, row, row_num):
@@ -118,9 +167,9 @@ class StudentImportService:
         class_name = row.get('class_name', '').strip()
         class_group = None
         if class_name:
-            try:
-                class_group = ClassGroup.all_objects.get(school=self.school, name=class_name)
-            except ClassGroup.DoesNotExist:
+            # Use in-memory cache instead of a DB query per row
+            class_group = self._class_cache.get(class_name.lower())
+            if class_group is None:
                 raise ValueError(f"Class '{class_name}' not found in this school")
 
         existing = Student.all_objects.filter(
@@ -142,8 +191,15 @@ class StudentImportService:
         # Normalise phone
         phone_normalised = Guardian._normalise_phone(guardian_phone)
 
-        # Create student
-        student_id = Student.generate_student_id(self.school)
+        # Assign custom admission number if provided in CSV, otherwise pre-allocated ID
+        custom_id = (row.get('admission_number', '') or row.get('student_id', '') or row.get('admission_no', '')).strip()
+        if custom_id:
+            if Student.all_objects.filter(school=self.school, student_id__iexact=custom_id).exists():
+                raise ValueError(f"Admission No. / Student ID '{custom_id}' already exists in this school")
+            student_id = custom_id
+        else:
+            student_id = self._next_student_id()
+
         student = Student.all_objects.create(
             school=self.school,
             student_id=student_id,
@@ -184,6 +240,8 @@ class StudentImportService:
                 is_primary=False,
             )
 
+        initialize_student_enrolment(student, assigned_by=self.job.uploaded_by)
+
     def _generate_error_report_file(self):
         """Create a downloadable CSV of failed rows with error reasons."""
         output = io.StringIO()
@@ -199,8 +257,59 @@ class StudentImportService:
         self.job.error_report_file.save(
             f'import_errors_{self.job.id}.csv',
             ContentFile(content),
-            save=False,
         )
+
+
+def initialize_student_enrolment(student, assigned_by=None):
+    """
+    Called upon student creation (single add or bulk CSV import).
+    1. Preserves historical assignment via ClassAssignment if current_class is set.
+    2. Opens FeeRecord for the current active term matching the class fee structure.
+    """
+    from schools.models import AcademicTerm
+    from payments.models import FeeRecord, FeeStructure
+    from decimal import Decimal
+
+    school = student.school
+    term = AcademicTerm.objects.filter(school=school, is_current=True).first()
+    if not term:
+        return
+
+    # 1. Initial ClassAssignment
+    if student.current_class:
+        ClassAssignment.objects.get_or_create(
+            student=student,
+            class_group=student.current_class,
+            academic_term=term,
+            defaults={
+                'start_date': student.admission_date or timezone.localdate(),
+                'assigned_by': assigned_by,
+            }
+        )
+
+    # 2. Initial FeeRecord
+    structure = (
+        FeeStructure.all_objects.filter(
+            school=school, academic_term=term,
+            class_group=student.current_class, is_active=True
+        ).first() or
+        FeeStructure.all_objects.filter(
+            school=school, academic_term=term,
+            class_group__isnull=True, is_active=True
+        ).first()
+    )
+    total = structure.total_amount if structure else Decimal('0')
+    FeeRecord.all_objects.get_or_create(
+        student=student,
+        academic_term=term,
+        defaults={
+            'school': school,
+            'fee_structure': structure,
+            'total_amount': total,
+            'amount_paid': Decimal('0'),
+            'amount_waived': Decimal('0'),
+        }
+    )
 
 
 class StudentSearchService:
@@ -210,7 +319,7 @@ class StudentSearchService:
     """
 
     @staticmethod
-    def search(school, query, limit=50):
+    def search(school, query, limit=50, is_active=None, class_id=None):
         from django.db.models import Q
         query = query.strip()
         if not query:
@@ -225,13 +334,33 @@ class StudentSearchService:
         else:
             student_ids_by_phone = []
 
+        filter_kwargs = {'school': school}
+        if is_active is not None:
+            filter_kwargs['is_active'] = is_active
+        if class_id is not None:
+            filter_kwargs['current_class_id'] = class_id
+
         qs = Student.all_objects.filter(
-            school=school, is_active=True
+            **filter_kwargs
         ).select_related('current_class').prefetch_related('guardians')
+
+        tokens = query.split()
+        if len(tokens) > 1:
+            # Multi-word query (e.g. "Faith mu" or "Brian Namukasa")
+            token_q = Q()
+            for t in tokens:
+                token_q &= (
+                    Q(first_name__icontains=t) |
+                    Q(last_name__icontains=t) |
+                    Q(other_names__icontains=t) |
+                    Q(student_id__icontains=t)
+                )
+            return qs.filter(token_q | Q(id__in=student_ids_by_phone))[:limit]
 
         return qs.filter(
             Q(first_name__icontains=query) |
             Q(last_name__icontains=query) |
+            Q(other_names__icontains=query) |
             Q(student_id__icontains=query) |
             Q(id__in=student_ids_by_phone)
         )[:limit]

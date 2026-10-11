@@ -117,44 +117,43 @@ Enter: email, first name, last name, password.
 
 ---
 
-## STEP 9 — Run the development server
+## STEP 9 — Run Django and Celery Services (Automated — Recommended)
 
-```powershell
-python manage.py runserver
-```
-
-API available at: http://localhost:8000/api/v1/
-Admin panel: http://localhost:8000/admin/
+You can launch all services (Django server, Celery worker, Celery beat) automatically. 
+- Ensure **Docker Desktop** is running.
+- If you ran `create_shortcut.ps1`, you can simply double-click the **SchoolBridge Dev Environment** shortcut on your Desktop.
+- Alternatively, double-click `start_dev.bat` in the root folder, or execute:
+  ```powershell
+  .\start_dev.ps1
+  ```
+The script will perform safety and environment checks and open 3 PowerShell windows for your development stack.
 
 ---
 
-## STEP 10 — Run Celery workers (separate PowerShell windows)
+## STEP 10 — Run Services Manually (Fallback / Alternative)
 
-### Window 1 — Messaging worker:
+If you prefer to start the services manually in separate PowerShell windows:
+
+### Window 1 — Django Server (port 8002):
 ```powershell
 .\venv\Scripts\Activate.ps1
-celery -A config worker -Q messaging -c 2 --loglevel=info -P solo
+python manage.py runserver 8002
 ```
+API: http://localhost:8002/api/v1/ | Admin: http://localhost:8002/admin/
 
-### Window 2 — Payments worker:
+### Window 2 — Celery Worker (all queues, solo pool for Windows):
 ```powershell
 .\venv\Scripts\Activate.ps1
-celery -A config worker -Q payments -c 1 --loglevel=info -P solo
+celery -A config worker -Q messaging,payments,automation -c 2 --loglevel=info -P solo
 ```
 
-### Window 3 — Automation worker:
-```powershell
-.\venv\Scripts\Activate.ps1
-celery -A config worker -Q automation -c 1 --loglevel=info -P solo
-```
-
-### Window 4 — Celery Beat (scheduled tasks):
+### Window 3 — Celery Beat (scheduled tasks):
 ```powershell
 .\venv\Scripts\Activate.ps1
 celery -A config beat --loglevel=info
 ```
 
-NOTE: -P solo is required on Windows (no fork support).
+*Note: `-P solo` is required on Windows as Celery does not support the fork-based pool architecture natively on Windows.*
 
 ---
 

@@ -133,7 +133,8 @@ class TranslationService:
                 '4️⃣ RECEIPT - Payment history\n'
                 '5️⃣ TIMETABLE - Class schedule\n'
                 '6️⃣ PLAN - Request payment plan\n'
-                '7️⃣ ABSENT - Report absence\n\n'
+                '7️⃣ ABSENT - Report absence\n'
+                '8️⃣ PAY - Pay fees via MoMo\n\n'
                 '💬 Type any number or command above.'
             ),
             'lg': (
@@ -145,9 +146,82 @@ class TranslationService:
                 '4️⃣ RECEIPT - Ebyafaanani by\'okusasula\n'
                 '5️⃣ TIMETABLE - Emirimu\n'
                 '6️⃣ PLAN - Saba entereera y\'okusasula\n'
-                '7️⃣ ABSENT - Loopa obutali ku somero\n\n'
+                '7️⃣ ABSENT - Loopa obutali ku somero\n'
+                '8️⃣ PAY - Sasula ensimbi ku MoMo\n\n'
                 '💬 Wandiika ennamba oba ekiragiro waggulu.'
             ),
+        },
+
+        # PAY command (US-A03)
+        'pay_initiated': {
+            'en': (
+                '✅ *Payment Request Sent*\n\n'
+                'Student: {student_name}\n'
+                'Amount: UGX {amount:,}\n\n'
+                'A MoMo prompt has been sent to your phone.\n'
+                'Please enter your PIN to confirm payment.\n\n'
+                'Reply BALANCE after payment to check your updated balance.'
+            ),
+            'lg': (
+                '✅ *Okusaba Okusasula Kwetikkiddwa*\n\n'
+                'Omuyizi: {student_name}\n'
+                'Omuwendo: UGX {amount:,}\n\n'
+                'Obubaka bwa MoMo butumiddwa ku ssimu yo.\n'
+                'Wandiika PIN yo okukakasa okusasula.\n\n'
+                'Wandiika BALANCE oluvannyuma okukebera ensimbi zo.'
+            ),
+        },
+        'pay_failed': {
+            'en': (
+                '❌ *Payment Request Failed*\n\n'
+                'We could not initiate your MoMo payment.\n'
+                'Please try again later or pay directly via MoMo to: {merchant_phone}\n\n'
+                'Reply HELP for assistance.'
+            ),
+            'lg': (
+                '❌ *Okusasula Tegusobodde*\n\n'
+                'Tetusobodde kutandika kusasula kwa MoMo.\n'
+                'Gezaako nate oluvannyuma oba osasula butereevu ku MoMo: {merchant_phone}\n\n'
+                'Wandiika HELP ofune obuyambi.'
+            ),
+        },
+        'pay_invalid_amount': {
+            'en': (
+                '⚠️ Invalid amount. Please use format:\n'
+                'PAY <amount> — e.g. PAY 150000\n'
+                'PAY <amount> <child name> — e.g. PAY 150000 John\n\n'
+                'Amount must be between 1,000 and 5,000,000 UGX.'
+            ),
+            'lg': (
+                '⚠️ Omuwendo si mutuufu. Kozesa:\n'
+                'PAY <omuwendo> — eky. PAY 150000\n'
+                'PAY <omuwendo> <erinnya ly\'omwana> — eky. PAY 150000 John\n\n'
+                'Omuwendo gusaanidde okuba wakati wa 1,000 ne 5,000,000 UGX.'
+            ),
+        },
+        'pay_multiple_siblings': {
+            'en': (
+                '👨‍👩‍👧‍👦 You have {count} children registered:\n\n'
+                '{children_list}\n\n'
+                'Please specify which child to pay for:\n'
+                'PAY <amount> <child name>\n'
+                'Example: PAY 150000 {example_name}'
+            ),
+            'lg': (
+                '👨‍👩‍👧‍👦 Olina abaana {count} abawandiisiddwa:\n\n'
+                '{children_list}\n\n'
+                'Laga omwana gw\'oyagala okusasulira:\n'
+                'PAY <omuwendo> <erinnya ly\'omwana>\n'
+                'Ekyokulabirako: PAY 150000 {example_name}'
+            ),
+        },
+        'pay_no_balance': {
+            'en': '✅ *{student_name}* has no outstanding balance. No payment needed!',
+            'lg': '✅ *{student_name}* talina nsimbi zisigaddewo. Tokusasula!',
+        },
+        'pay_student_not_found': {
+            'en': '⚠️ Could not find a child named "{identifier}". Reply MENU to see options.',
+            'lg': '⚠️ Omwana "{identifier}" tazuuliddwa. Wandiika MENU obone ebiragiro.',
         },
 
         # Common messages
@@ -162,6 +236,36 @@ class TranslationService:
         'unknown_command': {
             'en': "Sorry, I didn't understand that command. Reply HELP for a list of commands.",
             'lg': 'Nsonyiwa, sitegedde kiragiro kyo. Wandiika HELP ofune ebiragiro.',
+        },
+
+        # ABSENT command (US-052)
+        'absent_invalid_format': {
+            'en': (
+                '⚠️ Invalid format. Use:\n'
+                'ABSENT YYYY-MM-DD [reason]\n'
+                'Example: ABSENT 2026-07-15 Sick\n\n'
+                'Reply HELP for all commands.'
+            ),
+            'lg': (
+                '⚠️ Endabika si ntuufu. Kozesa:\n'
+                'ABSENT YYYY-MM-DD [ensonga]\n'
+                'Ekyokulabirako: ABSENT 2026-07-15 Mulwadde\n\n'
+                'Wandiika HELP ofune ebiragiro byonna.'
+            ),
+        },
+        'absent_invalid_date': {
+            'en': (
+                '⚠️ Invalid date format. Use YYYY-MM-DD.\n'
+                'Example: ABSENT 2026-07-15 Sick'
+            ),
+            'lg': (
+                '⚠️ Akabonero k\'ennaku si ntuufu. Kozesa YYYY-MM-DD.\n'
+                'Ekyokulabirako: ABSENT 2026-07-15 Mulwadde'
+            ),
+        },
+        'absent_noted': {
+            'en': '✅ Absence noted for {student_names} on {date_str}. The class teacher has been informed. Thank you.',
+            'lg': '✅ Obutaliwo bwa {student_names} ku {date_str} buwandiikiddwa. Mwalimu ategeezeddwa. Webale.',
         },
     }
 
@@ -211,10 +315,12 @@ class TranslationService:
         Normalises phone to +256... format to match Guardian.phone_normalised.
         """
         from students.models import Guardian
+        import hashlib
         phone = str(phone).strip()
         if not phone.startswith('+'):
             phone = '+' + phone
-        guardian = Guardian.objects.filter(phone_normalised=phone).first()
+        phone_hash = hashlib.sha256(phone.encode()).hexdigest()
+        guardian = Guardian.objects.filter(phone_hash=phone_hash).first()
         if guardian:
             return cls.get_language(guardian)
         return 'en'

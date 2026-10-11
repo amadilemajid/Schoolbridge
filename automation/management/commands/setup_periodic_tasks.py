@@ -1,36 +1,44 @@
 from django.core.management.base import BaseCommand
 import json
+from automation.beat_schedule import CELERYBEAT_SCHEDULE
 
 class Command(BaseCommand):
-    help = "Register all SchoolBridge Celery periodic tasks"
-
-    TASKS = [
-        {"name": "Daily reconciliation report (11pm EAT)", "task": "automation.tasks.generate_daily_reconciliation_report", "minute": "0", "hour": "20"},
-        {"name": "Check reconciliation alerts (hourly)", "task": "automation.tasks.check_reconciliation_alerts", "minute": "0", "hour": "*"},
-        {"name": "Weekly Director digest (Mon 7am EAT)", "task": "automation.tasks.send_weekly_director_digest", "minute": "0", "hour": "4", "day_of_week": "1"},
-        {"name": "Daily staff digest (7:30am EAT)", "task": "automation.tasks.send_daily_staff_digest", "minute": "30", "hour": "4"},
-        {"name": "Teacher attendance reminders (10am EAT)", "task": "attendance.tasks.send_teacher_attendance_reminders", "minute": "0", "hour": "7"},
-        {"name": "Celery queue health check (every 5 min)", "task": "automation.tasks.check_celery_queue_health", "minute": "*/5"},
-        {"name": "Refresh Airtel tokens (every 50 min)", "task": "payments.tasks.refresh_airtel_tokens", "minute": "*/50"},
-    ]
+    help = "Register all SchoolBridge Celery periodic tasks from beat_schedule"
 
     def handle(self, *args, **options):
         from django_celery_beat.models import PeriodicTask, CrontabSchedule
         created = updated = 0
-        for t in self.TASKS:
+        day_map = {
+            'monday': '1', 'tuesday': '2', 'wednesday': '3',
+            'thursday': '4', 'friday': '5', 'saturday': '6', 'sunday': '0'
+        }
+
+        for name, config in CELERYBEAT_SCHEDULE.items():
+            sched = config['schedule']
+            dow = getattr(sched, '_orig_day_of_week', '*')
+            dow_str = day_map.get(str(dow).lower(), str(dow))
+
             schedule, _ = CrontabSchedule.objects.get_or_create(
-                minute=t.get("minute", "*"),
-                hour=t.get("hour", "*"),
-                day_of_week=t.get("day_of_week", "*"),
-                day_of_month=t.get("day_of_month", "*"),
-                month_of_year=t.get("month_of_year", "*"),
+                minute=str(getattr(sched, '_orig_minute', '*')),
+                hour=str(getattr(sched, '_orig_hour', '*')),
+                day_of_week=dow_str,
+                day_of_month=str(getattr(sched, '_orig_day_of_month', '*')),
+                month_of_year=str(getattr(sched, '_orig_month_of_year', '*')),
             )
+            queue = config.get('options', {}).get('queue')
+
             _, was_created = PeriodicTask.objects.update_or_create(
-                name=t["name"],
-                defaults={"task": t["task"], "crontab": schedule, "enabled": True, "args": json.dumps([])},
+                name=name,
+                defaults={
+                    "task": config["task"],
+                    "crontab": schedule,
+                    "enabled": True,
+                    "queue": queue,
+                    "args": json.dumps([]),
+                },
             )
             if was_created:
                 created += 1
             else:
                 updated += 1
-        self.stdout.write(self.style.SUCCESS(f"Done: {created} created, {updated} updated"))
+        self.stdout.write(self.style.SUCCESS(f"Done: {created} created, {updated} updated (Total {len(CELERYBEAT_SCHEDULE)} tasks synced)"))

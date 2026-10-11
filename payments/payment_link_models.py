@@ -92,8 +92,10 @@ class PaymentLink(models.Model):
     def full_url(self):
         """Generate full payment URL."""
         from django.conf import settings
-        base_url = getattr(settings, 'PAYMENT_LINK_BASE_URL', 'https://pay.schoolbridge.ug')
-        return f"{base_url}/pay/{self.token}"
+        base_url = getattr(settings, 'PAYMENT_LINK_BASE_URL', None)
+        if not base_url:
+            base_url = 'http://localhost:5173' if settings.DEBUG else 'https://pay.schoolbridge.ug'
+        return f"{base_url.rstrip('/')}/pay/{self.token}"
 
     def mark_used(self, payment):
         """Mark link as used after successful payment."""

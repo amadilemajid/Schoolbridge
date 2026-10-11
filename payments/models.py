@@ -11,7 +11,9 @@ US-023: Payment reversal with approval.
 US-024: Fee waiver/discount.
 US-026/027: MoMo IPN (MTN + Airtel) with idempotency.
 US-029: Reconciliation queue.
+US-070: MoMo IPN logs with hash-based idempotency.
 """
+import hashlib
 import uuid
 from django.db import models
 from django.conf import settings
@@ -56,6 +58,9 @@ class FeeStructure(models.Model):
     def total_amount(self):
         return self.items.aggregate(total=models.Sum('amount'))['total'] or 0
 
+    def recalculate_fee_records(self):
+        self.feerecord_set.all().update(total_amount=self.total_amount)
+
     def __str__(self):
         return f"{self.name}"
 
@@ -72,6 +77,15 @@ class FeeStructureItem(models.Model):
     class Meta:
         db_table = 'fee_structure_items'
         ordering = ['-is_mandatory', 'name']
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.fee_structure.recalculate_fee_records()
+
+    def delete(self, *args, **kwargs):
+        fee_structure = self.fee_structure
+        super().delete(*args, **kwargs)
+        fee_structure.recalculate_fee_records()
 
     def __str__(self):
         return f"{self.name}: UGX {self.amount:,}"
@@ -122,6 +136,11 @@ class FeeRecord(models.Model):
             return 100
         return min(100, int((self.amount_paid / self.total_amount) * 100))
 
+    def save(self, *args, **kwargs):
+        if self.fee_structure:
+            self.total_amount = self.fee_structure.total_amount
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.student} — Term {self.academic_term} — Balance: {self.balance:,}"
 
@@ -137,6 +156,7 @@ class Payment(models.Model):
         ('bank', 'Bank Transfer'),
         ('mtn_momo', 'MTN MoMo'),
         ('airtel_money', 'Airtel Money'),
+        ('momo', 'Mobile Money'),
     ]
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -203,6 +223,7 @@ class Payment(models.Model):
             models.Index(fields=['momo_phone']),
             models.Index(fields=['status']),
             models.Index(fields=['fee_record']),
+            models.Index(fields=['school', 'student']),
         ]
 
     def __str__(self):
@@ -272,14 +293,30 @@ class PaymentPlanInstalment(models.Model):
 
 class FeeWaiver(models.Model):
     """US-024: Fee waiver/discount with reason. Director approval required."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     fee_record = models.ForeignKey(FeeRecord, on_delete=models.CASCADE, related_name='waivers')
     amount = models.DecimalField(max_digits=12, decimal_places=0)
     reason = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # Approver details
     approved_by = models.ForeignKey('authentication.User', on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name='approved_waivers')
     approved_at = models.DateTimeField(null=True, blank=True)
+    
+    # Rejecter details
+    rejection_reason = models.TextField(blank=True)
+    rejected_by = models.ForeignKey('authentication.User', on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='rejected_waivers')
+    rejected_at = models.DateTimeField(null=True, blank=True)
+
     requested_by = models.ForeignKey('authentication.User', on_delete=models.SET_NULL,
                                      null=True, related_name='requested_waivers')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -289,19 +326,29 @@ class FeeWaiver(models.Model):
 
     class Meta:
         db_table = 'fee_waivers'
-        indexes = [models.Index(fields=['school', 'approved_at'])]
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['school', 'status']),
+            models.Index(fields=['school', 'approved_at']),
+        ]
 
 
 class MoMoIPNLog(models.Model):
     """
     US-026/027: Log every raw IPN webhook received.
-    Idempotency: reject if momo_reference already exists.
-    Unmatched payments go to reconciliation queue.
+    US-070: momo_reference_hash stores SHA-256 of the reference for
+            idempotency checks so the reference can be encrypted later.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     provider = models.CharField(max_length=10, choices=[('mtn', 'MTN'), ('airtel', 'Airtel')])
     momo_reference = models.CharField(max_length=100, unique=True)
+    momo_reference_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+        blank=True,
+        help_text="SHA-256 of momo_reference — used for idempotency lookups"
+    )
     phone = models.CharField(max_length=20)
     amount = models.DecimalField(max_digits=12, decimal_places=0)
     raw_payload = models.JSONField()
@@ -315,9 +362,18 @@ class MoMoIPNLog(models.Model):
         db_table = 'momo_ipn_logs'
         indexes = [
             models.Index(fields=['momo_reference']),
+            models.Index(fields=['momo_reference_hash']),
             models.Index(fields=['phone']),
             models.Index(fields=['processed']),
         ]
+
+    def save(self, *args, **kwargs):
+        # US-070: always keep hash in sync with the reference
+        if self.momo_reference:
+            self.momo_reference_hash = hashlib.sha256(
+                self.momo_reference.encode()
+            ).hexdigest()
+        super().save(*args, **kwargs)
 
 
 class ReconciliationQueue(models.Model):

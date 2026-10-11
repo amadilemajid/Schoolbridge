@@ -75,6 +75,33 @@ class AuditLog(models.Model):
     def __str__(self):
         return f"[{self.category}] {self.action} by {self.actor_email} at {self.created_at}"
 
+    # ---- Immutability guards (SEC-008) ----
+    # DB-level enforcement (GRANT INSERT, SELECT only) is the primary control.
+    # These ORM-level guards add defence-in-depth so application code cannot
+    # accidentally UPDATE or DELETE audit records.
+
+    def save(self, *args, _bypass_immutability=False, **kwargs):
+        """Block UPDATE; only INSERT (no PK yet) is allowed."""
+        if not _bypass_immutability and not self._state.adding:
+            raise PermissionError(
+                "AuditLog records are immutable. "
+                "Existing entries cannot be updated. Create a new corrective entry instead."
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, _bypass_immutability=False, **kwargs):
+        """Block DELETE. Retention cleanup must go through the DB retention job directly."""
+        if not _bypass_immutability:
+            raise PermissionError(
+                "AuditLog records cannot be deleted via the ORM. "
+                "Use the DB-level retention job to purge records older than 3 years."
+            )
+        return super().delete(*args, **kwargs)
+
+    # Prevent bulk_update from silently bypassing the guard
+    class DoNotUpdate:
+        """Sentinel: raise if anyone tries objects.update() on AuditLog."""
+
     @classmethod
     def log(cls, *, actor=None, school=None, category, action, description='',
             target=None, before=None, after=None, extra=None, request=None):

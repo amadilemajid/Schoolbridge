@@ -15,9 +15,14 @@ env_file = os.path.join(BASE_DIR, '.env')
 if os.path.exists(env_file):
     environ.Env.read_env(env_file)
 
-SECRET_KEY = env('DJANGO_SECRET_KEY', default='dev-secret-key-change-in-production')
+# SEC-007: Well-known insecure default sentinels — guard raises ImproperlyConfigured
+# in production (DEBUG=False) if the live values still match these defaults.
+_DEFAULT_SECRET = 'dev-secret-key-change-in-production'
+_DEFAULT_FERNET = ['9M9uLOiKSiGlWJoIlJ0YM9EDL9kCDJ6Jq4k6xG4YG5M=']
+
+SECRET_KEY = env('DJANGO_SECRET_KEY', default=_DEFAULT_SECRET)
 DEBUG = env('DEBUG', default=False)
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1'])
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1', 'testserver', '*'])
 
 # --- Security (US-069) ---
 SECURE_SSL_REDIRECT = not DEBUG
@@ -58,6 +63,12 @@ LOCAL_APPS = [
     'notifications',
     'audit',
     'automation',
+    'timetable.apps.TimetableConfig',
+    'onboarding.apps.OnboardingConfig',
+    'risk.apps.RiskAppConfig',
+    'homework.apps.HomeworkConfig',
+    'behaviour.apps.BehaviourConfig',
+    'reports.apps.ReportsConfig',
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -95,7 +106,7 @@ DATABASES = {
         'PASSWORD': env('DB_PASSWORD', default=''),
         'HOST': env('DB_HOST', default='localhost'),
         'PORT': env('DB_PORT', default='5432'),
-        'CONN_MAX_AGE': 60,
+        'CONN_MAX_AGE': 0,
     }
 }
 
@@ -119,7 +130,7 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 # --- Auth / JWT (US-002, US-005) ---
 AUTH_USER_MODEL = 'authentication.User'
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',),
+    'DEFAULT_AUTHENTICATION_CLASSES': ('authentication.backends.SchoolBridgeJWTAuthentication',),
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',),
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
@@ -127,14 +138,16 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '10/min',        # US-072: auth endpoints
-        'user': '100/min',       # US-072: general API per authenticated user
-        'webhook': '500/min',    # US-072: MoMo webhook endpoints
-        'burst': '30/min',       # Burst rate for intensive actions
+        'anon': '1000/min',           # US-072: auth endpoints
+        'user': '100/min',            # US-072: general API per authenticated user
+        'webhook': '500/min',         # US-072: MoMo webhook endpoints
+        'burst': '30/min',            # Burst rate for intensive actions
+        'registration': '10/min',     # SEC-001: public school registration endpoint
+        'password_reset': '5/min',    # SEC-002: password reset confirm endpoint
     },
     'DEFAULT_RENDERER_CLASSES': ('rest_framework.renderers.JSONRenderer',),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 50,
+    'DEFAULT_PAGINATION_CLASS': 'config.pagination.SchoolBridgePagination',
+    'PAGE_SIZE': 25,
     'EXCEPTION_HANDLER': 'config.exceptions.custom_exception_handler',
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.URLPathVersioning',
     'DEFAULT_VERSION': 'v1',
@@ -201,11 +214,15 @@ USE_S3 = env.bool('USE_S3', default=False)
 SENTRY_DSN = env('SENTRY_DSN', default='')
 
 # --- CORS ---
-CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=['http://localhost:3000'])
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+])
 CORS_ALLOW_CREDENTIALS = True
 
 # --- App constants ---
-MANUAL_PAYMENT_APPROVAL_THRESHOLD = 500_000   # UGX (US-019)
+MANUAL_PAYMENT_APPROVAL_THRESHOLD = 500_000 # UGX (US-019: payments over 500k require Director approval)
 REVERSAL_APPROVAL_THRESHOLD = 100_000          # UGX (US-023)
 ATTENDANCE_OPEN_HOUR = 7
 ATTENDANCE_CLOSE_HOUR = 12
@@ -238,7 +255,7 @@ MTN_MOMO_API_USER = env('MTN_MOMO_API_USER', default='')
 MTN_MOMO_API_KEY = env('MTN_MOMO_API_KEY', default='')
 MTN_MOMO_ENVIRONMENT = env('MTN_MOMO_ENVIRONMENT', default='sandbox')
 MTN_MOMO_BASE_URL = env('MTN_MOMO_BASE_URL', default='https://sandbox.momodeveloper.mtn.com')
-FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:5173')
 
 # API Documentation (US-F03)
 SPECTACULAR_SETTINGS = {

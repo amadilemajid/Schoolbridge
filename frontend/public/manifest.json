@@ -1,0 +1,22 @@
+{
+  "name": "SchoolBridge",
+  "short_name": "SchoolBridge",
+  "description": "Multi-Tenant School Automation Platform for Ugandan Schools",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#10b981",
+  "orientation": "any",
+  "scope": "/",
+  "lang": "en-UG",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "productivity"],
+  "screenshots": []
+}

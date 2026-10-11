@@ -128,13 +128,32 @@ class AcademicTerm(models.Model):
             AcademicTerm.objects.filter(school=self.school, is_current=True).update(is_current=False)
         is_new = self._state.adding
         old_fee_deadline = None
-        if not is_new:
-            try:
-                old = AcademicTerm.objects.get(pk=self.pk)
-                old_fee_deadline = old.fee_deadline
-            except AcademicTerm.DoesNotExist:
-                pass
+        is_activating = False
+        if self.is_active:
+            if is_new:
+                is_activating = True
+            else:
+                try:
+                    old = AcademicTerm.objects.get(pk=self.pk)
+                    old_fee_deadline = old.fee_deadline
+                    if not old.is_active:
+                        is_activating = True
+                except AcademicTerm.DoesNotExist:
+                    is_activating = True
+        else:
+            if not is_new:
+                try:
+                    old = AcademicTerm.objects.get(pk=self.pk)
+                    old_fee_deadline = old.fee_deadline
+                except AcademicTerm.DoesNotExist:
+                    pass
+
         super().save(*args, **kwargs)
+        
+        if is_activating:
+            from payments.services import FeeService
+            FeeService.generate_fee_records_for_term(self)
+
         # US-013: Reschedule all pending Celery tasks if term dates change
         if not is_new and old_fee_deadline and old_fee_deadline != self.fee_deadline:
             from automation.tasks import reschedule_term_reminders

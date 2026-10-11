@@ -58,7 +58,7 @@ class InstalmentPlanService:
         
         # Create instalments
         for idx, inst_data in enumerate(instalments_data, start=1):
-            PaymentPlanInstalment.all_objects.create(
+            PaymentPlanInstalment.objects.create(
                 payment_plan=plan,
                 instalment_number=idx,
                 due_date=inst_data['due_date'],

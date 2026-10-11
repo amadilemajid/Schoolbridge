@@ -39,14 +39,16 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 
 
 class AcademicTermSerializer(serializers.ModelSerializer):
+    academic_year_year = serializers.IntegerField(source='academic_year.year', read_only=True)
+
     class Meta:
         model = AcademicTerm
         fields = [
-            'id', 'academic_year', 'term_number', 'name',
+            'id', 'academic_year', 'academic_year_year', 'term_number', 'name',
             'start_date', 'end_date', 'fee_deadline',
             'is_current', 'is_active', 'activated_at',
         ]
-        read_only_fields = ['id', 'activated_at']
+        read_only_fields = ['id', 'activated_at', 'academic_year_year']
 
     def validate(self, data):
         start = data.get('start_date', getattr(self.instance, 'start_date', None))

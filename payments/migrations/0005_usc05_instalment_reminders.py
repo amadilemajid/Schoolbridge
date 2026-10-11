@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('payments', '0004_epic_c_models'),  # Adjust based on latest migration
+        ('payments', '0002_defaultercampaign_reminderescalation_and_more'),
     ]
 
     operations = [

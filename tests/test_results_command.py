@@ -44,7 +44,8 @@ class ResultsCommandTests(TestCase):
             class_group=s.current_class or self.class_group,
             total_marks=total, average_marks=avg,
             class_rank=rank, total_students=total_s,
-            division=div if div is not None else ''
+            division=div if div is not None else '',
+            is_published=True
         )
 
     def _make_guardian(self, phone, lang='en', student=None):

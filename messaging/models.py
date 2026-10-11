@@ -65,7 +65,7 @@ class MessageLog(models.Model):
     US-039: Log every outbound message — sent, delivered, read, failed.
     90-day retention. Delivery status updated via WhatsApp webhook callbacks.
     """
-    CHANNEL_CHOICES = [('whatsapp', 'WhatsApp'), ('sms', 'SMS')]
+    CHANNEL_CHOICES = [('whatsapp', 'WhatsApp'), ('sms', 'SMS'), ('voice', 'Voice Call')]
     STATUS_CHOICES = [
         ('queued', 'Queued'),
         ('sent', 'Sent'),
@@ -95,6 +95,8 @@ class MessageLog(models.Model):
 
     error_message = models.TextField(blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True,
+        help_text="Timestamp when delivery was confirmed via webhook or DEBUG simulation")
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = TenantManager()
@@ -109,6 +111,7 @@ class MessageLog(models.Model):
             models.Index(fields=['whatsapp_message_id']),
             models.Index(fields=['status']),
             models.Index(fields=['template_type']),
+            models.Index(fields=['school', 'student']),
         ]
 
 
@@ -132,11 +135,18 @@ class BroadcastMessage(models.Model):
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
+    CHANNEL_CHOICES = [
+        ('whatsapp', 'WhatsApp'),
+        ('sms', 'SMS'),
+        ('voice', 'Voice Call'),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     title = models.CharField(max_length=200)
     message_body = models.TextField()
+    channel = models.CharField(max_length=10, choices=CHANNEL_CHOICES, default='whatsapp',
+        help_text="Delivery channel: whatsapp or sms")
     target_type = models.CharField(max_length=20, choices=TARGET_CHOICES)
     target_class = models.ForeignKey('students.ClassGroup', on_delete=models.SET_NULL,
                                      null=True, blank=True)
@@ -197,3 +207,83 @@ class InboundMessage(models.Model):
             models.Index(fields=['from_phone']),
             models.Index(fields=['command', 'processed']),
         ]
+
+
+class BroadcastMedia(models.Model):
+    """
+    US-B01/US-B02: Tracks uploaded media files for WhatsApp voice/document broadcasts.
+    Stores the Meta WABA media_id for efficient re-use (upload once, send many).
+    media_id expires after 30 days per Meta policy.
+    """
+    MEDIA_TYPE_CHOICES = [
+        ('voice', 'Voice Note'),
+        ('document', 'Document'),
+        ('image', 'Image'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending Upload'),
+        ('uploaded', 'Uploaded to Meta'),
+        ('expired', 'Expired'),
+        ('failed', 'Upload Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    school = models.ForeignKey(
+        'schools.School', on_delete=models.CASCADE,
+        related_name='broadcast_media'
+    )
+    media_file = models.FileField(
+        upload_to='broadcast_media/%Y/%m/',
+        help_text='Compressed media file (Opus OGG for voice, PDF for documents)'
+    )
+    media_type = models.CharField(max_length=10, choices=MEDIA_TYPE_CHOICES)
+    original_filename = models.CharField(max_length=255, blank=True)
+    file_size_bytes = models.PositiveIntegerField(default=0)
+    duration_seconds = models.FloatField(
+        null=True, blank=True,
+        help_text='Duration in seconds for voice/audio files'
+    )
+    whatsapp_media_id = models.CharField(
+        max_length=255, blank=True,
+        help_text='Meta WABA media_id for sending without re-upload'
+    )
+    meta_upload_status = models.CharField(
+        max_length=10, choices=STATUS_CHOICES, default='pending'
+    )
+    expires_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Meta media_id expiry (30 days from upload)'
+    )
+    uploaded_by = models.ForeignKey(
+        'authentication.User', on_delete=models.SET_NULL,
+        null=True, related_name='uploaded_media'
+    )
+    description = models.TextField(
+        blank=True,
+        help_text='Optional description for the media (e.g. announcement title)'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = TenantManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        db_table = 'broadcast_media'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.get_media_type_display()} - {self.original_filename or self.media_file.name}"
+
+    @property
+    def is_expired(self):
+        """Check if the Meta media_id has expired."""
+        if not self.expires_at:
+            return True
+        from django.utils import timezone
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_ready(self):
+        """Check if media is uploaded and still valid for sending."""
+        return self.meta_upload_status == 'uploaded' and not self.is_expired and self.whatsapp_media_id
+

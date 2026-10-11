@@ -51,6 +51,8 @@ class EscalationEngine:
         
         created_count = 0
         for fee_record in fee_records:
+            if fee_record.is_fully_paid:
+                continue
             for level, days_before in cls.ESCALATION_SCHEDULE.items():
                 scheduled_date = deadline - timedelta(days=days_before)
                 

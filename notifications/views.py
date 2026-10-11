@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import serializers as drf_serializers
 from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import extend_schema, inline_serializer
 from .models import Notification
 
 
@@ -39,6 +40,19 @@ class NotificationMarkReadView(APIView):
     """Mark a single notification as read."""
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='MarkReadResponse',
+                fields={'message': drf_serializers.CharField()}
+            ),
+            404: inline_serializer(
+                name='MarkReadError',
+                fields={'error': drf_serializers.CharField()}
+            )
+        }
+    )
     def post(self, request, pk):
         try:
             n = Notification.all_objects.get(id=pk, recipient=request.user)
@@ -52,6 +66,15 @@ class NotificationMarkAllReadView(APIView):
     """Mark all notifications as read."""
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='MarkAllReadResponse',
+                fields={'message': drf_serializers.CharField()}
+            )
+        }
+    )
     def post(self, request):
         Notification.all_objects.filter(
             recipient=request.user, is_read=False
@@ -66,6 +89,14 @@ class NotificationUnreadCountView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        responses={
+            200: inline_serializer(
+                name='UnreadCountResponse',
+                fields={'unread_count': drf_serializers.IntegerField()}
+            )
+        }
+    )
     def get(self, request):
         count = Notification.all_objects.filter(
             recipient=request.user, is_read=False

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en-UG">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Primary SEO -->
+    <title>SchoolBridge — School Automation Platform for Uganda</title>
+    <meta name="description" content="SchoolBridge is a multi-tenant school management platform built for Ugandan nursery, primary, and secondary schools. Manage students, fees, attendance, UNEB results, and WhatsApp communication." />
+    <meta name="application-name" content="SchoolBridge" />
+    <meta name="author" content="SchoolBridge Team" />
+
+    <!-- PWA & Branding -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#10b981" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SchoolBridge" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- Service Worker Management -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        // Unregister stale service workers on localhost to ensure fresh UI builds
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+          navigator.serviceWorker.getRegistrations().then(registrations => {
+            for (let reg of registrations) {
+              reg.unregister();
+            }
+          });
+          if ('caches' in window) {
+            caches.keys().then(names => {
+              for (let name of names) {
+                caches.delete(name);
+              }
+            });
+          }
+        }
+      }
+    </script>
+  </body>
+</html>

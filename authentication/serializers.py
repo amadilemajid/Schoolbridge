@@ -68,26 +68,57 @@ class UserSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     """
     US-002: Login with lockout after 5 failed attempts (15 min).
+    Supports login via email, username, or phone number.
     Returns JWT access + refresh tokens on success.
     """
-    email = serializers.EmailField()
+    email = serializers.CharField(required=False, allow_blank=True, default='')
+    username = serializers.CharField(required=False, allow_blank=True, default='')
+    phone = serializers.CharField(required=False, allow_blank=True, default='')
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        email = data['email'].lower().strip()
-        password = data['password']
+        identifier = (data.get('email') or data.get('username') or data.get('phone') or '').lower().strip()
+        password = data.get('password')
 
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
+        if not identifier:
+            raise serializers.ValidationError('Email, username, or phone number is required.')
+
+        phone_clean = identifier.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+        phone_variants = [identifier, phone_clean]
+        if phone_clean.startswith('+256'):
+            phone_variants.append('0' + phone_clean[4:])
+            phone_variants.append(phone_clean[4:])
+            phone_variants.append(phone_clean[1:])
+        elif phone_clean.startswith('256'):
+            phone_variants.append('0' + phone_clean[3:])
+            phone_variants.append(phone_clean[3:])
+            phone_variants.append('+' + phone_clean)
+        elif phone_clean.startswith('0') and len(phone_clean) == 10:
+            phone_variants.append('+256' + phone_clean[1:])
+            phone_variants.append('256' + phone_clean[1:])
+            phone_variants.append(phone_clean[1:])
+        elif len(phone_clean) == 9 and not phone_clean.startswith('0'):
+            phone_variants.append('0' + phone_clean)
+            phone_variants.append('+256' + phone_clean)
+            phone_variants.append('256' + phone_clean)
+
+        from django.db.models import Q
+        user = User.objects.filter(
+            Q(email__iexact=identifier)
+            | Q(phone__in=phone_variants)
+            | Q(email__istartswith=identifier + '@')
+        ).first()
+
+        if not user:
             raise serializers.ValidationError('Invalid email or password.')
 
         # US-002: Check lockout before attempting authentication
         if user.is_locked:
-            remaining = (user.locked_until - timezone.now()).seconds // 60
+            diff_seconds = max(0, (user.locked_until - timezone.now()).total_seconds())
+            remaining = max(1, int(diff_seconds // 60) + (1 if diff_seconds % 60 > 0 else 0))
             raise serializers.ValidationError(
                 f'Account locked due to too many failed attempts. '
-                f'Try again in {remaining} minutes.'
+                f'Try again in {remaining} minute(s).'
             )
 
         if not user.check_password(password):
@@ -112,19 +143,30 @@ class LoginSerializer(serializers.Serializer):
         refresh = RefreshToken.for_user(user)
         refresh['role'] = user.role
         refresh['school_id'] = str(user.school_id) if user.school_id else None
+        school_data = None
+        if user.school:
+            from schools.serializers import SchoolSerializer
+            school_data = SchoolSerializer(user.school).data
         return {
             'access': str(refresh.access_token),
             'refresh': str(refresh),
             'user': UserSerializer(user).data,
+            'school': school_data,
         }
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    """US-004: Request password reset email."""
-    email = serializers.EmailField()
+    """US-004: Request password reset email or phone/identifier."""
+    email = serializers.CharField(required=False, allow_blank=True, default='')
+    identifier = serializers.CharField(required=False, allow_blank=True, default='')
 
-    def validate_email(self, value):
-        return value.lower().strip()
+    def validate(self, data):
+        ident = (data.get('identifier') or data.get('email') or '').strip()
+        if not ident:
+            raise serializers.ValidationError('Email or phone number is required.')
+        data['identifier'] = ident
+        data['email'] = ident
+        return data
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):

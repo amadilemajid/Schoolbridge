@@ -15,21 +15,42 @@ class IsDirector(BasePermission):
         return request.user.is_authenticated and request.user.role in ('director', 'system_admin')
 
 
+class IsDirectorOnly(BasePermission):
+    """Strictly for Director governance/approvals/reversals."""
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in ('director', 'system_admin')
+
+
+class IsBursarOnly(BasePermission):
+    """Strictly for Bursar operational tasks."""
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in ('bursar', 'system_admin')
+
+
 class IsDirectorOrBursar(BasePermission):
+    """Strictly for financial and fee management operations."""
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role in ('director', 'bursar', 'system_admin')
 
 
+class IsDirectorOrAdmin(BasePermission):
+    """For school administration, student records, and admissions operations."""
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in (
+            'director', 'bursar', 'school_admin', 'registrar', 'system_admin'
+        )
+
+
 class IsTeacher(BasePermission):
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role in ('teacher', 'director', 'system_admin')
+        return request.user.is_authenticated and request.user.role in ('teacher', 'director', 'school_admin', 'system_admin')
 
 
 class IsSchoolStaff(BasePermission):
     """Any authenticated staff member of the school."""
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role in (
-            'director', 'bursar', 'teacher', 'system_admin'
+            'director', 'bursar', 'teacher', 'school_admin', 'registrar', 'system_admin'
         )
 
 

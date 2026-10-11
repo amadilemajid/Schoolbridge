@@ -57,10 +57,14 @@ class PaymentLinkService:
         expiry = timezone.now() + timedelta(hours=expiry_hours or cls.DEFAULT_EXPIRY_HOURS)
         
         # Get guardian info
-        guardian = fee_record.student.guardians.filter(is_primary=True).first()
-        if not guardian:
-            raise ValueError("No primary guardian found for student")
-        
+        guardian = fee_record.student.guardians.filter(is_primary=True).first() or fee_record.student.guardians.first()
+        if guardian:
+            recipient_phone = guardian.phone_normalised or getattr(guardian, 'phone', '')
+            recipient_name = f"{guardian.first_name} {guardian.last_name}".strip()
+        else:
+            recipient_phone = getattr(fee_record.student, 'emergency_contact_phone', '') or ''
+            recipient_name = f"{fee_record.student.first_name} {fee_record.student.last_name}".strip()
+
         # Create link
         link = PaymentLink.all_objects.create(
             school=fee_record.school,
@@ -70,8 +74,8 @@ class PaymentLinkService:
             amount=amount,
             description=description or f"School fees for {fee_record.student.first_name} {fee_record.student.last_name}",
             expires_at=expiry,
-            recipient_phone=guardian.phone_normalised,
-            recipient_name=f"{guardian.first_name} {guardian.last_name}",
+            recipient_phone=recipient_phone,
+            recipient_name=recipient_name,
             created_by=created_by,
         )
         

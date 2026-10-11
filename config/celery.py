@@ -38,3 +38,31 @@ def handle_task_failure(sender, task_id, exception, args, kwargs, traceback, ein
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     print(f'Request: {self.request!r}')
+
+
+app.conf.task_routes = {
+    # ── Real-time / High Priority ──────────────────────────────────────────
+    # These MUST run immediately to satisfy SLA (e.g. 60s receipt delivery).
+    # Routed to the `realtime` queue — dedicate ≥1 worker to this queue.
+    'messaging.tasks.send_payment_receipt': {'queue': 'realtime'},
+    'messaging.tasks.send_payment_reversal_notification': {'queue': 'realtime'},
+    'messaging.tasks.send_whatsapp_message': {'queue': 'realtime'},
+    'messaging.tasks.send_sms_fallback': {'queue': 'realtime'},
+    'messaging.tasks.send_absence_alert': {'queue': 'realtime'},
+    'risk.tasks.dispatch_risk_alerts': {'queue': 'realtime'},
+
+    # ── Bulk / Low Priority ────────────────────────────────────────────────
+    # These are long-running and must NOT block real-time tasks.
+    # Routed to the `messaging` queue so messaging workers process them.
+    'messaging.tasks.send_broadcast_chunk': {'queue': 'messaging'},
+    'messaging.tasks.process_voice_broadcast': {'queue': 'messaging'},
+    'messaging.tasks.distribute_report_cards': {'queue': 'bulk'},
+    'students.tasks.process_bulk_import': {'queue': 'bulk'},
+    'results.tasks.generate_single_report_card': {'queue': 'bulk'},
+    'results.tasks.notify_parent_report_ready': {'queue': 'bulk'},
+    'results.tasks.recompute_term_results_task': {'queue': 'bulk'},
+
+    # ── Default / Medium Priority ──────────────────────────────────────────
+    # Everything else falls through to the `celery` (default) queue.
+}
+

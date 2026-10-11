@@ -71,6 +71,14 @@ class EpicCIntegrationTest(TestCase):
             name='P7 Term 1 Fees',
             is_active=True
         )
+        # Create item so total_amount is 600,000
+        from payments.models import FeeStructureItem
+        FeeStructureItem.objects.create(
+            fee_structure=self.fee_structure,
+            name='Tuition',
+            amount=600000,
+            is_mandatory=True
+        )
         
         # Create students with guardians
         self.students = []
@@ -83,7 +91,9 @@ class EpicCIntegrationTest(TestCase):
                 school=self.school,
                 first_name=f'Student{i}',
                 last_name=f'Test{i}',
-                registration_number=f'STU{i:03d}',
+                student_id=f'STU{i:03d}',
+                admission_date=date(2024, 1, 1),
+                academic_year_admitted=2024,
                 date_of_birth=date(2010, 1, 1),
                 gender='M' if i % 2 == 0 else 'F',
                 current_class=self.class_group,
@@ -105,15 +115,14 @@ class EpicCIntegrationTest(TestCase):
             
             # Create fee record with varying balances
             balance_amounts = [600000, 450000, 200000, 100000, 0]  # Different balance levels
-            total_amount = balance_amounts[i]
-            amount_paid = 0 if i < 4 else total_amount  # Last student fully paid
+            target_balance = balance_amounts[i]
+            amount_paid = 600000 - target_balance
             
             fee_record = FeeRecord.objects.create(
                 school=self.school,
                 student=student,
                 academic_term=self.term,
                 fee_structure=self.fee_structure,
-                total_amount=total_amount,
                 amount_paid=amount_paid,
                 amount_waived=0
             )
@@ -162,9 +171,9 @@ class EpicCIntegrationTest(TestCase):
             expected_date = deadline - timedelta(days=days_before)
             self.assertEqual(escalation.scheduled_date, expected_date)
         
-        print(f"✓ Created {count} escalation reminders")
-        print(f"✓ 5 levels per student verified")
-        print(f"✓ Escalation dates calculated correctly")
+        print(f"[OK] Created {count} escalation reminders")
+        print(f"[OK] 5 levels per student verified")
+        print(f"[OK] Escalation dates calculated correctly")
     
     def test_02_escalation_messages(self):
         """US-C01: Test escalation message templates."""
@@ -189,7 +198,7 @@ class EpicCIntegrationTest(TestCase):
             
             self.assertIsNotNone(message)
             self.assertIn(student.get_full_name(), message)
-            self.assertIn(str(int(balance)), message)
+            self.assertIn(f"{int(balance):,}", message)
             
             # Verify urgency increases with level
             if level == 1:
@@ -209,9 +218,9 @@ class EpicCIntegrationTest(TestCase):
         )
         self.assertIsNotNone(message_lg)
         
-        print(f"✓ All 5 escalation levels have valid templates")
-        print(f"✓ English and Luganda messages generated")
-        print(f"✓ Messages contain student data and urgency markers")
+        print(f"[OK] All 5 escalation levels have valid templates")
+        print(f"[OK] English and Luganda messages generated")
+        print(f"[OK] Messages contain student data and urgency markers")
     
     def test_03_escalation_suppression(self):
         """US-C01: Test escalation suppression when paid."""
@@ -254,8 +263,8 @@ class EpicCIntegrationTest(TestCase):
         ).count()
         self.assertEqual(escalations_after, 5)
         
-        print(f"✓ {suppressed_count} escalations suppressed after payment")
-        print(f"✓ Status changed from 'scheduled' to 'suppressed'")
+        print(f"[OK] {suppressed_count} escalations suppressed after payment")
+        print(f"[OK] Status changed from 'scheduled' to 'suppressed'")
     
     def test_04_sibling_aggregation(self):
         """US-C02: Test sibling fee aggregation."""
@@ -280,9 +289,9 @@ class EpicCIntegrationTest(TestCase):
             self.assertIn('balance', sibling_data)
             self.assertIn('class', sibling_data)
         
-        print(f"✓ Sibling aggregation working")
-        print(f"✓ Found {summary['sibling_count']} siblings")
-        print(f"✓ Total family balance: UGX {summary['total_balance']:,}")
+        print(f"[OK] Sibling aggregation working")
+        print(f"[OK] Found {summary['sibling_count']} siblings")
+        print(f"[OK] Total family balance: UGX {summary['total_balance']:,}")
     
     def test_05_payment_link_generation(self):
         """US-C03: Test payment link generation."""
@@ -321,10 +330,10 @@ class EpicCIntegrationTest(TestCase):
         self.assertIn('/pay/', link.full_url)
         self.assertIn(link.token, link.full_url)
         
-        print(f"✓ Payment link generated with token: {link.token[:16]}...")
-        print(f"✓ Amount: UGX {link.amount:,}")
-        print(f"✓ Expires in 72 hours")
-        print(f"✓ Link is usable and validates correctly")
+        print(f"[OK] Payment link generated with token: {link.token[:16]}...")
+        print(f"[OK] Amount: UGX {link.amount:,}")
+        print(f"[OK] Expires in 72 hours")
+        print(f"[OK] Link is usable and validates correctly")
     
     def test_06_payment_link_expiry(self):
         """US-C03: Test payment link expiry logic."""
@@ -352,9 +361,9 @@ class EpicCIntegrationTest(TestCase):
         validated = PaymentLinkService.validate_and_get_link(link.token)
         self.assertIsNone(validated)
         
-        print(f"✓ Expired link correctly identified")
-        print(f"✓ Expired link marked as not usable")
-        print(f"✓ Validation rejects expired link")
+        print(f"[OK] Expired link correctly identified")
+        print(f"[OK] Expired link marked as not usable")
+        print(f"[OK] Validation rejects expired link")
     
     def test_07_campaign_creation_high_balance(self):
         """US-C04: Test defaulter campaign creation with high balance segment."""
@@ -389,11 +398,11 @@ class EpicCIntegrationTest(TestCase):
         # Verify message personalization
         for target in targets:
             self.assertIn(target.student.get_full_name(), target.message_sent)
-            self.assertIn(str(int(target.balance_at_send)), target.message_sent)
+            self.assertIn(f"{int(target.balance_at_send):,}", target.message_sent)
         
-        print(f"✓ Campaign created: {campaign.name}")
-        print(f"✓ Targets: {campaign.target_count} students")
-        print(f"✓ Total balance targeted: UGX {campaign.total_balance_targeted:,}")
+        print(f"[OK] Campaign created: {campaign.name}")
+        print(f"[OK] Targets: {campaign.target_count} students")
+        print(f"[OK] Total balance targeted: UGX {campaign.total_balance_targeted:,}")
     
     def test_08_campaign_segmentation_zero_payment(self):
         """US-C04: Test campaign segmentation - zero payment."""
@@ -409,8 +418,8 @@ class EpicCIntegrationTest(TestCase):
             created_by=self.user
         )
         
-        # Should target students 0-3 (all have amount_paid=0)
-        self.assertEqual(campaign.target_count, 4)
+        # Should target student 0 only (has amount_paid=0)
+        self.assertEqual(campaign.target_count, 1)
         
         # Verify all targets have zero payment
         targets = DefaulterCampaignTarget.objects.filter(campaign=campaign)
@@ -418,8 +427,8 @@ class EpicCIntegrationTest(TestCase):
             fee_record = target.fee_record
             self.assertEqual(fee_record.amount_paid, 0)
         
-        print(f"✓ Zero payment segment identified {campaign.target_count} students")
-        print(f"✓ All targets confirmed with zero payments")
+        print(f"[OK] Zero payment segment identified {campaign.target_count} students")
+        print(f"[OK] All targets confirmed with zero payments")
     
     def test_09_campaign_segmentation_specific_class(self):
         """US-C04: Test campaign segmentation - specific class."""
@@ -444,8 +453,8 @@ class EpicCIntegrationTest(TestCase):
         for target in targets:
             self.assertEqual(target.student.current_class, self.class_group)
         
-        print(f"✓ Class-specific segment targeted {campaign.target_count} students")
-        print(f"✓ All targets from {self.class_group.name}")
+        print(f"[OK] Class-specific segment targeted {campaign.target_count} students")
+        print(f"[OK] All targets from {self.class_group.name}")
     
     def test_10_all_features_integration(self):
         """Test all Epic-C features working together."""
@@ -486,11 +495,11 @@ class EpicCIntegrationTest(TestCase):
         self.assertEqual(len(links), 4)
         self.assertEqual(campaign.target_count, 4)
         
-        print(f"✓ Escalations: {escalation_count} reminders scheduled")
-        print(f"✓ Sibling aggregation: {sibling_summary['sibling_count']} siblings")
-        print(f"✓ Payment links: {len(links)} links generated")
-        print(f"✓ Campaign: {campaign.target_count} targets")
-        print(f"\n🎉 ALL EPIC-C FEATURES WORKING TOGETHER!")
+        print(f"[OK] Escalations: {escalation_count} reminders scheduled")
+        print(f"[OK] Sibling aggregation: {sibling_summary['sibling_count']} siblings")
+        print(f"[OK] Payment links: {len(links)} links generated")
+        print(f"[OK] Campaign: {campaign.target_count} targets")
+        print(f"\n [OK] ALL EPIC-C FEATURES WORKING TOGETHER!")
 
 
 def run_tests():

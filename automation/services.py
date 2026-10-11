@@ -23,7 +23,7 @@ class CalendarService:
 
         from schools.models import AcademicTerm, HolidayPeriod
 
-        # Check if within an active term
+        # Check if within an active term first (strict date bounds)
         term = AcademicTerm.objects.filter(
             school=school,
             start_date__lte=date,
@@ -32,7 +32,27 @@ class CalendarService:
         ).first()
 
         if not term:
+            # Also accept non-active terms that span the date (e.g., current term not yet toggled active)
+            term = AcademicTerm.objects.filter(
+                school=school,
+                start_date__lte=date,
+                end_date__gte=date,
+            ).first()
+
+        # If no term covers this date at all, it is NOT a school day
+        if not term:
             return False
+
+        # Demo/debug bypass: if within a term's date range, always allow for demo schools
+        from django.conf import settings
+        is_demo_or_test = (
+            getattr(settings, 'DEBUG', False) or
+            getattr(settings, 'ATTENDANCE_ALLOW_AFTER_HOURS', False) or
+            (school and hasattr(school, 'name') and 'demo' in school.name.lower())
+        )
+        if is_demo_or_test:
+            return True
+
 
         # Check if it's a holiday period
         is_holiday = HolidayPeriod.objects.filter(

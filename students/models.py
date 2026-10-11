@@ -7,10 +7,13 @@ US-011: Multiple guardians (up to 3), primary guardian.
 US-012: Class groups with form teacher, historical assignments.
 US-014: Search <500ms.
 US-015: Enrolment reports.
+US-070: PII encryption at rest — guardian name, phone, student DOB.
 """
+import hashlib
 import uuid
 from django.db import models
 from django.core.validators import RegexValidator
+from schools.encrypted_fields import EncryptedCharField, EncryptedDateField
 from schools.managers import TenantManager
 
 
@@ -111,22 +114,32 @@ class Student(models.Model):
         parts = [self.first_name, self.other_names, self.last_name]
         return ' '.join(p for p in parts if p).strip()
 
+    @property
+    def admission_number(self):
+        """Domain alias for student_id standard in Ugandan schools."""
+        return self.student_id
+
     @classmethod
     def generate_student_id(cls, school):
         """Generate next sequential student ID for the school."""
         from django.utils import timezone
-        year = timezone.now().year
-        prefix = f"SCH-{year}-"
-        last = (cls.all_objects.filter(school=school, student_id__startswith=prefix)
-                .order_by('-student_id').first())
-        if last:
-            try:
-                num = int(last.student_id.split('-')[-1]) + 1
-            except (ValueError, IndexError):
+        from django.db import transaction
+        from schools.models import School
+
+        with transaction.atomic():
+            locked_school = School.objects.select_for_update().get(pk=school.pk)
+            year = timezone.now().year
+            prefix = f"SCH-{year}-"
+            last = (cls.all_objects.filter(school=locked_school, student_id__startswith=prefix)
+                    .order_by('-student_id').first())
+            if last:
+                try:
+                    num = int(last.student_id.split('-')[-1]) + 1
+                except (ValueError, IndexError):
+                    num = 1
+            else:
                 num = 1
-        else:
-            num = 1
-        return f"{prefix}{num:04d}"
+            return f"{prefix}{num:04d}"
 
 
 class Guardian(models.Model):
@@ -136,15 +149,25 @@ class Guardian(models.Model):
     Phone is used to match incoming MoMo payments.
     """
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='guardians')
-    first_name = models.CharField(max_length=100)
-    last_name = models.CharField(max_length=100)
+
+    # US-070: Encrypted PII — guardian name fields
+    first_name = EncryptedCharField(max_length=100)
+    last_name = EncryptedCharField(max_length=100)
     relationship = models.CharField(max_length=50,
         help_text="e.g. 'Father', 'Mother', 'Uncle', 'Guardian'")
 
     # US-009: Ugandan phone validation
-    phone = models.CharField(max_length=20, validators=[UGANDA_PHONE_REGEX])
-    phone_normalised = models.CharField(max_length=20, blank=True,
-        help_text="Normalised to +256XXXXXXXXX format for WhatsApp/MoMo matching")
+    # US-070: phone and phone_normalised are encrypted at rest.
+    # phone_hash (SHA-256 of phone_normalised) is stored plain for DB lookups.
+    phone = EncryptedCharField(max_length=20)
+    phone_normalised = EncryptedCharField(max_length=20, blank=True,
+        help_text="Normalised to +256XXXXXXXXX format for WhatsApp/MoMo matching — encrypted")
+    phone_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        db_index=True,
+        help_text="SHA-256 of phone_normalised — used for DB lookups without decrypting"
+    )
     email = models.EmailField(blank=True)
 
     is_primary = models.BooleanField(default=False,
@@ -161,7 +184,7 @@ class Guardian(models.Model):
         db_table = 'guardians'
         ordering = ['-is_primary', 'first_name']
         indexes = [
-            models.Index(fields=['phone_normalised']),
+            models.Index(fields=['phone_hash']),
             models.Index(fields=['student', 'is_primary']),
         ]
 
@@ -171,8 +194,23 @@ class Guardian(models.Model):
             Guardian.objects.filter(student=self.student, is_primary=True).exclude(
                 pk=self.pk
             ).update(is_primary=False)
-        # Normalise phone to +256XXXXXXXXX
-        self.phone_normalised = self._normalise_phone(self.phone)
+
+        # Always recompute phone_normalised and phone_hash BEFORE super().save()
+        # so every row in the DB has a consistent hash for WhatsApp lookups.
+        # US-070: phone_hash is plain-text SHA-256 of phone_normalised (+256…).
+        self.phone_normalised = self._normalise_phone(self.phone) or ''
+        if self.phone_normalised:
+            self.phone_hash = hashlib.sha256(self.phone_normalised.encode()).hexdigest()
+
+        # If caller passed update_fields, force phone_normalised + phone_hash into the set
+        # so a partial save (e.g. g.save(update_fields=['is_primary'])) never leaves
+        # the hash column stale.
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            updated = set(update_fields)
+            updated.update({'phone_normalised', 'phone_hash'})
+            kwargs['update_fields'] = list(updated)
+
         super().save(*args, **kwargs)
 
         # US-010: Re-confirm WhatsApp if number changes
@@ -187,12 +225,8 @@ class Guardian(models.Model):
     @staticmethod
     def _normalise_phone(phone):
         """Convert 07XXXXXXXX or +2567XXXXXXXX to +256XXXXXXXXX."""
-        phone = phone.strip().replace(' ', '').replace('-', '')
-        if phone.startswith('0'):
-            return '+256' + phone[1:]
-        if phone.startswith('256') and not phone.startswith('+'):
-            return '+' + phone
-        return phone
+        from config.validators import normalise_uganda_phone
+        return normalise_uganda_phone(phone)
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} ({self.relationship}) — {self.student}"

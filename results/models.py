@@ -47,6 +47,19 @@ class Assessment(models.Model):
     weight = models.DecimalField(max_digits=5, decimal_places=2, default=1.0,
         help_text="Weight in final total computation (e.g. 0.3 for 30%)")
 
+    # Approval Lifecycle & Optimistic Locking
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('submitted', 'Submitted for Review'),
+        ('under_review', 'Under Review'),
+        ('approved', 'Approved'),
+        ('published', 'Published'),
+        ('rejected', 'Rejected'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    rejection_reason = models.TextField(blank=True, help_text="Reason given if rejected by Director.")
+    version = models.PositiveIntegerField(default=1, help_text="Optimistic locking version field.")
+
     # Locking (US-041)
     is_locked = models.BooleanField(default=False,
         help_text="Locked after submission. Director can unlock.")
@@ -121,6 +134,8 @@ class TermResult(models.Model):
         help_text="Signed S3 URL for parent access (30-day expiry)")
     report_card_generated_at = models.DateTimeField(null=True, blank=True)
     parent_notified = models.BooleanField(default=False)
+    is_published = models.BooleanField(default=False)
+    published_at = models.DateTimeField(null=True, blank=True)
 
     objects = TenantManager()
     all_objects = models.Manager()

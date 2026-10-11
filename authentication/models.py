@@ -37,6 +37,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
         ('system_admin', 'System Admin'),
         ('director', 'School Director'),
+        ('school_admin', 'School Admin'),
+        ('registrar', 'Registrar / Admissions'),
         ('bursar', 'Bursar'),
         ('teacher', 'Teacher'),
     ]
@@ -101,9 +103,15 @@ class User(AbstractBaseUser, PermissionsMixin):
         from django.conf import settings
         from django.utils import timezone
         import datetime
+        now = timezone.now()
+        # Reset counter if previous lockout window has expired
+        if self.locked_until and now >= self.locked_until:
+            self.failed_login_count = 0
+            self.locked_until = None
+
         self.failed_login_count += 1
         if self.failed_login_count >= settings.LOGIN_MAX_ATTEMPTS:
-            self.locked_until = timezone.now() + datetime.timedelta(
+            self.locked_until = now + datetime.timedelta(
                 minutes=settings.LOGIN_LOCKOUT_MINUTES
             )
         self.save(update_fields=['failed_login_count', 'locked_until'])

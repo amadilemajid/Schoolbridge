@@ -155,23 +155,29 @@ class DefaulterCampaignService:
 
     @classmethod
     def _create_targets(cls, campaign, targets):
-        """Create DefaulterCampaignTarget records."""
+        """
+        Create DefaulterCampaignTarget records.
+        Fix: now passes parent_name to _build_message.
+        Fix: uses ignore_conflicts=True so a re-run won't crash on unique_together.
+        """
         target_objs = []
-        
+
         for t in targets:
             guardian = t['guardian']
-            language = guardian.preferred_language or 'english'
-            
-            # Build personalized message
+            # Fix: Guardian model uses 'en'/'lg' choices, not 'english'/'luganda'
+            language = guardian.preferred_language or 'en'
+            parent_name = f"{guardian.first_name} {guardian.last_name}".strip() or 'Parent/Guardian'
+
             message = cls._build_message(
                 campaign=campaign,
                 student_name=f"{t['student'].first_name} {t['student'].last_name}",
+                parent_name=parent_name,
                 balance=t['balance'],
                 class_name=t['class_name'],
                 language=language,
                 school_name=campaign.school.name,
             )
-            
+
             target_objs.append(
                 DefaulterCampaignTarget(
                     campaign=campaign,
@@ -183,31 +189,74 @@ class DefaulterCampaignService:
                     language=language,
                 )
             )
-        
-        DefaulterCampaignTarget.objects.bulk_create(target_objs)
+
+        # ignore_conflicts prevents crash on unique_together ('campaign', 'fee_record')
+        # if this method is somehow called twice for the same campaign.
+        DefaulterCampaignTarget.objects.bulk_create(target_objs, ignore_conflicts=True)
 
     @classmethod
-    def _build_message(cls, campaign, student_name, balance, class_name, 
-                      language, school_name):
+    def _build_message(cls, campaign, student_name, parent_name='Parent/Guardian',
+                       balance=0, class_name='N/A', language='en', school_name=''):
         """
         Build personalized message from template.
-        Replaces placeholders: {student_name}, {balance}, {class_name}, {school_name}
+
+        Fixes:
+          1. Added parent_name parameter — was missing, caused KeyError if template
+             used {parent_name}.
+          2. Bridge bracket-style tags [Student Name] → {student_name} so UI-authored
+             templates work without requiring users to learn Python format syntax.
+          3. language comparison fixed: Guardian model uses 'en'/'lg', not 'english'/'luganda'.
+          4. Wrapped .format() in try/except — any unrecognised placeholder no longer
+             crashes the entire campaign.
+          5. Added fee_deadline None guard — if term has no deadline, uses empty string.
+          6. Added {payment_link} placeholder support.
         """
+        # Select template by language
         template = (
-            campaign.message_template_lg if language == 'luganda' 
+            campaign.message_template_lg if language in ('lg', 'luganda')
             else campaign.message_template_en
-        )
-        
-        if not template:
-            template = campaign.message_template_en
-        
-        return template.format(
-            student_name=student_name,
-            balance=f"{int(balance):,}",
-            class_name=class_name,
-            school_name=school_name,
-            deadline=campaign.academic_term.fee_deadline.strftime('%d %b %Y'),
-        )
+        ) or campaign.message_template_en
+
+        # Bridge UI bracket-style tags → Python .format() placeholders
+        bracket_to_format = {
+            '[Student Name]': '{student_name}',
+            '[Parent Name]': '{parent_name}',
+            '[Balance]': '{balance}',
+            '[Class Name]': '{class_name}',
+            '[School Name]': '{school_name}',
+            '[Deadline]': '{deadline}',
+            '[Payment Link]': '{payment_link}',
+        }
+        for bracket_tag, fmt_tag in bracket_to_format.items():
+            template = template.replace(bracket_tag, fmt_tag)
+
+        # Safe deadline string
+        deadline_str = ''
+        term = campaign.academic_term
+        if term and getattr(term, 'fee_deadline', None):
+            deadline_str = term.fee_deadline.strftime('%d %b %Y')
+
+        try:
+            return template.format(
+                student_name=student_name,
+                parent_name=parent_name,
+                balance=f"{int(balance):,}",
+                class_name=class_name,
+                school_name=school_name,
+                deadline=deadline_str,
+                payment_link='schoolbridge.io/pay',
+            )
+        except (KeyError, ValueError, IndexError) as exc:
+            # Fallback: return a safe default message so the campaign still runs
+            logger.warning(
+                f"Template formatting failed for campaign '{campaign.name}': {exc}. "
+                "Using fallback message."
+            )
+            return (
+                f"Dear {parent_name}, your child {student_name} owes "
+                f"UGX {int(balance):,}. "
+                f"Please clear by {deadline_str or 'end of term'}. — {school_name}"
+            )
 
     @classmethod
     @transaction.atomic

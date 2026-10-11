@@ -8,7 +8,7 @@ import hashlib
 import hmac
 from decimal import Decimal
 from unittest.mock import patch, MagicMock
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.contrib.auth import get_user_model
 from schools.models import School, AcademicTerm, AcademicYear, SchoolMoMoConfig
 from students.models import Student, Guardian, ClassGroup
@@ -95,6 +95,7 @@ class FeeServiceTest(TestCase):
         self.assertEqual(self.fee_record.balance, Decimal('150000'))
         self.assertEqual(payment.status, 'completed')
 
+    @override_settings(MANUAL_PAYMENT_APPROVAL_THRESHOLD=500_000)
     def test_payment_above_threshold_requires_approval(self):
         """Payments > 500k UGX require Director approval."""
         director = User.objects.create_user(
@@ -113,6 +114,34 @@ class FeeServiceTest(TestCase):
         # Balance should NOT be updated until approved
         self.fee_record.refresh_from_db()
         self.assertEqual(self.fee_record.amount_paid, Decimal('0'))
+
+    def test_payment_on_cleared_account_rejected_by_api(self):
+        """Payments against a cleared account (balance=0) are rejected with 400 Bad Request."""
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from payments.views import PaymentViewSet
+
+        # Fully clear the fee record
+        self.fee_record.amount_paid = Decimal('300000')
+        self.fee_record.save()
+        self.assertEqual(self.fee_record.balance, Decimal('0'))
+
+        bursar = User.objects.create_user(
+            email='bursar_clear@school.ug', password='pass', role='bursar',
+            school=self.school, first_name='Bursar', last_name='Clear',
+        )
+
+        factory = APIRequestFactory()
+        req = factory.post('/api/v1/payments/payments/', {
+            'fee_record_id': str(self.fee_record.id),
+            'amount': 50000,
+            'method': 'cash',
+        }, format='json')
+        force_authenticate(req, user=bursar)
+        view = PaymentViewSet.as_view({'post': 'create'})
+        res = view(req)
+
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Actions for CLEARED accounts are locked', str(res.data))
 
     def test_full_payment_marks_paid(self):
         """After full payment, is_fully_paid = True."""
@@ -323,3 +352,183 @@ class MultiTenantIsolationTest(TestCase):
                                  "Fee record from another school appeared!")
         finally:
             clear_current_school()
+
+
+class FeeWaiverWorkflowTest(TestCase):
+    """
+    US-024: Complete waiver workflow across all students and roles.
+    Verifies segregation of duties, role permissions, and balance updates.
+    """
+    def setUp(self):
+        self.school = make_school("Waiver Academy")
+        self.term = make_term(self.school)
+        self.class_group = ClassGroup.all_objects.create(
+            school=self.school, name='S.4 A', level='S4'
+        )
+        self.student_a = Student.all_objects.create(
+            school=self.school, student_id='WA-001',
+            first_name='Faith', last_name='Mukasa',
+            gender='F', admission_date='2024-02-05',
+            academic_year_admitted=2024, current_class=self.class_group,
+        )
+        self.student_b = Student.all_objects.create(
+            school=self.school, student_id='WA-002',
+            first_name='Peter', last_name='Mukasa',
+            gender='M', admission_date='2024-02-05',
+            academic_year_admitted=2024, current_class=self.class_group,
+        )
+        self.fee_record_a = FeeRecord.all_objects.create(
+            school=self.school, student=self.student_a,
+            academic_term=self.term,
+            total_amount=Decimal('500000'), amount_paid=Decimal('100000'),
+        )
+        self.fee_record_b = FeeRecord.all_objects.create(
+            school=self.school, student=self.student_b,
+            academic_term=self.term,
+            total_amount=Decimal('400000'), amount_paid=Decimal('0'),
+        )
+        self.bursar = User.objects.create_user(
+            email='bursar@waiver.ug', password='pass', role='bursar',
+            school=self.school, first_name='James', last_name='Bursar',
+        )
+        self.director = User.objects.create_user(
+            email='director@waiver.ug', password='pass', role='director',
+            school=self.school, first_name='Sarah', last_name='Director',
+        )
+
+    def test_bursar_creates_waiver_is_pending(self):
+        """Bursar submits a waiver request -> status is pending."""
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from payments.views import FeeWaiverViewSet
+
+        factory = APIRequestFactory()
+        req = factory.post('/api/v1/payments/waivers/', {
+            'fee_record_id': str(self.fee_record_a.id),
+            'amount': 100000,
+            'reason': 'Academic Scholarship',
+        }, format='json')
+        force_authenticate(req, user=self.bursar)
+        view = FeeWaiverViewSet.as_view({'post': 'create'})
+        res = view(req)
+
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'pending')
+        self.fee_record_a.refresh_from_db()
+        self.assertEqual(self.fee_record_a.amount_waived, Decimal('0'))
+        self.assertEqual(self.fee_record_a.balance, Decimal('400000'))
+
+    def test_bursar_cannot_approve_waiver_403(self):
+        """Bursar attempting to approve any waiver is rejected with HTTP 403."""
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from payments.views import FeeWaiverViewSet
+        from payments.models import FeeWaiver
+
+        waiver = FeeWaiver.all_objects.create(
+            school=self.school, fee_record=self.fee_record_a,
+            amount=Decimal('100000'), reason='Test',
+            status='pending', requested_by=self.bursar,
+        )
+
+        factory = APIRequestFactory()
+        req = factory.post(f'/api/v1/payments/waivers/{waiver.id}/approve/')
+        force_authenticate(req, user=self.bursar)
+        view = FeeWaiverViewSet.as_view({'post': 'approve'})
+        res = view(req, pk=str(waiver.id))
+
+        self.assertEqual(res.status_code, 403)
+        waiver.refresh_from_db()
+        self.assertEqual(waiver.status, 'pending')
+
+    def test_director_approves_waiver_success(self):
+        """Director approves a pending waiver -> status approved, balance reduced."""
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from payments.views import FeeWaiverViewSet
+        from payments.models import FeeWaiver
+
+        waiver = FeeWaiver.all_objects.create(
+            school=self.school, fee_record=self.fee_record_a,
+            amount=Decimal('100000'), reason='Academic Scholarship',
+            status='pending', requested_by=self.bursar,
+        )
+
+        factory = APIRequestFactory()
+        req = factory.post(f'/api/v1/payments/waivers/{waiver.id}/approve/')
+        force_authenticate(req, user=self.director)
+        view = FeeWaiverViewSet.as_view({'post': 'approve'})
+        res = view(req, pk=str(waiver.id))
+
+        self.assertEqual(res.status_code, 200)
+        waiver.refresh_from_db()
+        self.assertEqual(waiver.status, 'approved')
+        self.fee_record_a.refresh_from_db()
+        self.assertEqual(self.fee_record_a.amount_waived, Decimal('100000'))
+        self.assertEqual(self.fee_record_a.balance, Decimal('300000'))
+
+    def test_director_direct_grant_waiver_auto_approved(self):
+        """Director grants waiver directly -> status approved immediately."""
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from payments.views import FeeWaiverViewSet
+
+        factory = APIRequestFactory()
+        req = factory.post('/api/v1/payments/waivers/', {
+            'fee_record_id': str(self.fee_record_b.id),
+            'amount': 80000,
+            'reason': 'Director Special Bursary',
+        }, format='json')
+        force_authenticate(req, user=self.director)
+        view = FeeWaiverViewSet.as_view({'post': 'create'})
+        res = view(req)
+
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['status'], 'approved')
+        self.fee_record_b.refresh_from_db()
+        self.assertEqual(self.fee_record_b.amount_waived, Decimal('80000'))
+        self.assertEqual(self.fee_record_b.balance, Decimal('320000'))
+
+    def test_director_rejects_waiver(self):
+        """Director rejects a pending waiver with reason -> status rejected, balance untouched."""
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from payments.views import FeeWaiverViewSet
+        from payments.models import FeeWaiver
+
+        waiver = FeeWaiver.all_objects.create(
+            school=self.school, fee_record=self.fee_record_a,
+            amount=Decimal('100000'), reason='Test',
+            status='pending', requested_by=self.bursar,
+        )
+
+        factory = APIRequestFactory()
+        req = factory.post(f'/api/v1/payments/waivers/{waiver.id}/reject/', {
+            'reason': 'Ineligible for this academic term',
+        }, format='json')
+        force_authenticate(req, user=self.director)
+        view = FeeWaiverViewSet.as_view({'post': 'reject'})
+        res = view(req, pk=str(waiver.id))
+
+        self.assertEqual(res.status_code, 200)
+        waiver.refresh_from_db()
+        self.assertEqual(waiver.status, 'rejected')
+        self.assertEqual(waiver.rejection_reason, 'Ineligible for this academic term')
+        self.fee_record_a.refresh_from_db()
+        self.assertEqual(self.fee_record_a.amount_waived, Decimal('0'))
+        self.assertEqual(self.fee_record_a.balance, Decimal('400000'))
+
+    def test_fee_record_serializer_exposes_pending_waiver(self):
+        """FeeRecordSerializer dynamically reflects has_pending_waiver for all students."""
+        from payments.serializers import FeeRecordSerializer
+        from payments.models import FeeWaiver
+
+        FeeWaiver.all_objects.create(
+            school=self.school, fee_record=self.fee_record_a,
+            amount=Decimal('100000'), reason='Pending Scholarship',
+            status='pending', requested_by=self.bursar,
+        )
+
+        serializer_a = FeeRecordSerializer(self.fee_record_a)
+        self.assertTrue(serializer_a.data['has_pending_waiver'])
+        self.assertEqual(serializer_a.data['pending_waiver_amount'], 100000)
+
+        serializer_b = FeeRecordSerializer(self.fee_record_b)
+        self.assertFalse(serializer_b.data['has_pending_waiver'])
+        self.assertEqual(serializer_b.data['pending_waiver_amount'], 0)
+

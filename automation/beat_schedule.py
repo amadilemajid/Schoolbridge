@@ -42,6 +42,13 @@ CELERYBEAT_SCHEDULE = {
         'options': {'queue': 'automation'},
     },
 
+    # US-051: Weekly low-attendance alert to parents + Director — Monday 8am EAT (05:00 UTC)
+    'weekly-low-attendance-alerts': {
+        'task': 'attendance.tasks.check_low_attendance_alerts',
+        'schedule': crontab(hour=5, minute=0, day_of_week='monday'),
+        'options': {'queue': 'automation'},
+    },
+
     # US-073: Celery queue depth check — every 5 minutes
     'celery-queue-health-check': {
         'task': 'automation.tasks.check_celery_queue_health',
@@ -76,6 +83,15 @@ CELERYBEAT_SCHEDULE = {
     'sync-meta-templates': {
         'task': 'automation.tasks.sync_pending_meta_templates',
         'schedule': crontab(hour=5, minute=0),
+        'options': {'queue': 'automation'},
+    },
+
+    # US-073: Background health check cache — every 2 minutes
+    # Keeps GET /health/detail/ and /health/metrics/ fast (served from cache).
+    # Also triggers SYSTEM_ALERT if any critical service goes down.
+    'background-health-checks': {
+        'task': 'automation.tasks.run_background_health_checks',
+        'schedule': crontab(minute='*/2'),
         'options': {'queue': 'automation'},
     },
 }

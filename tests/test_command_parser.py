@@ -208,10 +208,10 @@ class CommandParserTests(TestCase):
         assert cmd == 'UNKNOWN'
         assert args == {}
 
-    def test_parse_invalid_number(self):
-        """Invalid number should return UNKNOWN."""
+    def test_parse_pay_number(self):
+        """Numeric shortcut 8 should map to PAY."""
         cmd, args = InboundCommandProcessor.parse_command('8')
-        assert cmd == 'UNKNOWN'
+        assert cmd == 'PAY'
         assert args == {}
 
     def test_parse_invalid_number_zero(self):
@@ -233,7 +233,7 @@ class CommandParserTests(TestCase):
         assert args == {}
 
     def test_numeric_shortcuts_completeness(self):
-        """All numeric shortcuts 1-7 should map to commands."""
+        """All numeric shortcuts 1-8 should map to commands."""
         expected_mapping = {
             '1': 'BALANCE',
             '2': 'RESULTS',
@@ -242,6 +242,7 @@ class CommandParserTests(TestCase):
             '5': 'TIMETABLE',
             '6': 'PLAN',
             '7': 'ABSENT',
+            '8': 'PAY',
         }
         
         for number, expected_cmd in expected_mapping.items():
@@ -276,7 +277,7 @@ class CommandParserTests(TestCase):
         """COMMANDS list should contain all expected commands."""
         expected_commands = [
             'BALANCE', 'RECEIPT', 'HELP', 'PLAN', 'ABSENT',
-            'RESULTS', 'ATTEND', 'TIMETABLE', 'MENU', 'LUGANDA', 'ENGLISH',
+            'RESULTS', 'ATTEND', 'TIMETABLE', 'MENU', 'LUGANDA', 'ENGLISH', 'PAY',
         ]
         
         commands = InboundCommandProcessor.COMMANDS
@@ -285,8 +286,8 @@ class CommandParserTests(TestCase):
             assert expected in commands, f"{expected} should be in COMMANDS list"
 
     def test_no_unmapped_numbers(self):
-        """Numbers outside 1-7 should not be valid commands."""
-        invalid_numbers = ['0', '8', '9', '10', '99', '-1']
+        """Numbers outside 1-8 should not be valid commands."""
+        invalid_numbers = ['0', '9', '10', '99', '-1']
         
         for num in invalid_numbers:
             cmd, args = InboundCommandProcessor.parse_command(num)

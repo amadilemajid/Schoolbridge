@@ -21,10 +21,15 @@ def schedule_fee_reminders(self, term_id: str):
     US-032: Schedule WhatsApp fee reminders for all students in a term.
     Reminder days: 14, 7, 3, 1 before fee_deadline.
     Each FeeRecord gets its own set of Celery eta tasks.
+
+    RISK-P4B: Saves a ScheduledReminder record per task so that
+    reschedule_term_reminders can revoke old tasks instead of stacking
+    duplicate ETA tasks in the queue.
     """
     from schools.models import AcademicTerm
     from payments.models import FeeRecord
     from messaging.tasks import send_fee_reminder
+    from automation.models import ScheduledReminder
     import datetime
 
     try:
@@ -33,25 +38,38 @@ def schedule_fee_reminders(self, term_id: str):
         today = timezone.localdate()
         reminder_days = [14, 7, 3, 1]
 
-        fee_records = FeeRecord.all_objects.filter(
-            academic_term=term, student__is_active=True
-        ).values_list('id', flat=True)
+        fee_records = list(
+            FeeRecord.all_objects.filter(
+                academic_term=term, student__is_active=True
+            ).select_related('school')
+        )
 
         scheduled = 0
+        import pytz
+        eat = pytz.timezone('Africa/Kampala')
+
         for days in reminder_days:
             reminder_date = deadline - datetime.timedelta(days=days)
             if reminder_date <= today:
                 continue  # Past — skip
-            # Schedule at 8:00 AM EAT on the reminder date
-            import pytz
-            eat = pytz.timezone('Africa/Kampala')
             remind_at = eat.localize(
                 datetime.datetime.combine(reminder_date, datetime.time(8, 0))
             )
-            for fr_id in fee_records:
-                send_fee_reminder.apply_async(
-                    args=[str(fr_id), days],
+            for fr in fee_records:
+                task = send_fee_reminder.apply_async(
+                    args=[str(fr.id), days],
                     eta=remind_at,
+                )
+                # RISK-P4B: store task_id for future revocation
+                ScheduledReminder.objects.update_or_create(
+                    fee_record=fr,
+                    reminder_days=days,
+                    defaults={
+                        'school': fr.school,
+                        'academic_term': term,
+                        'celery_task_id': task.id,
+                        'eta': remind_at,
+                    },
                 )
                 scheduled += 1
 
@@ -64,11 +82,29 @@ def schedule_fee_reminders(self, term_id: str):
 def reschedule_term_reminders(self, term_id: str):
     """
     US-013: Called when term fee_deadline changes.
-    Cancels old scheduled tasks and reschedules them.
-    Note: With Celery ETA tasks, we rely on idempotency — suppressed if paid.
-    Simply re-run schedule_fee_reminders to create new tasks.
+    Revokes all previously queued Celery ETA tasks for this term
+    before scheduling fresh ones (RISK-P4B).
     """
+    from automation.models import ScheduledReminder
+
     logger.info(f"Rescheduling reminders for term {term_id} due to date change")
+
+    # Revoke old Celery ETA tasks so parents don't get duplicate messages
+    old_reminders = ScheduledReminder.objects.filter(academic_term_id=term_id)
+    task_ids = list(old_reminders.values_list('celery_task_id', flat=True))
+    if task_ids:
+        try:
+            from celery import current_app
+            current_app.control.revoke(task_ids, terminate=False)
+            logger.info(
+                f"Revoked {len(task_ids)} old reminder tasks for term {term_id}"
+            )
+        except Exception as exc:
+            # Non-fatal: log and continue — worst case duplicates fire
+            logger.warning(f"Could not revoke old tasks for term {term_id}: {exc}")
+        old_reminders.delete()
+
+    # Schedule fresh tasks
     schedule_fee_reminders.delay(term_id)
 
 
@@ -103,9 +139,7 @@ def schedule_instalment_reminders(self, plan_id: str):
 @shared_task(bind=True, max_retries=1, default_retry_delay=1800)  # Retry at 11:30pm
 def generate_daily_reconciliation_report(self):
     """US-062: Daily reconciliation report at 11pm EAT. Retry at 11:30pm on failure."""
-    from payments.models import ReconciliationQueue, Payment
-    from django.core.mail import send_mail
-    from django.conf import settings
+    from payments.models import Payment
     from django.utils import timezone
 
     try:
@@ -161,10 +195,10 @@ def _generate_school_recon_report(self, school_id: str, date_str: str):
         report_lines = [
             f"SchoolBridge Daily Reconciliation — {school.name}",
             f"Date: {date}",
-            f"",
+            "",
             f"MoMo Payments Received: {momo_payments.count()} | Total: UGX {total_momo:,}",
             f"Unmatched Payments: {unmatched.count()}",
-            f"",
+            "",
         ]
         for item in unmatched:
             report_lines.append(f"  - {item.phone} | UGX {item.amount:,} | {item.provider.upper()}")
@@ -251,8 +285,7 @@ def send_weekly_director_digest(self):
     from django.core.mail import send_mail
     from django.conf import settings
     from django.utils import timezone
-    from payments.models import FeeRecord, Payment
-    from attendance.models import AttendanceRecord
+    from payments.models import Payment
 
     today = timezone.localdate()
     week_ago = today - __import__('datetime').timedelta(days=7)
@@ -264,7 +297,6 @@ def send_weekly_director_digest(self):
             if not directors:
                 continue
 
-            term = school.terms.filter(is_current=True).first()
             week_payments = Payment.all_objects.filter(
                 school=school, payment_date__date__gte=week_ago, status='completed'
             )
@@ -304,8 +336,6 @@ def send_daily_staff_digest(self):
 def _send_school_daily_digest(self, school_id: str, date_str: str):
     from schools.models import School
     from payments.models import Payment
-    from attendance.models import AttendanceRecord
-    from messaging.services import WhatsAppService
     from django.conf import settings
     from django.core.mail import send_mail
     import datetime
@@ -457,3 +487,51 @@ def check_database_backup_health(self):
             payload={'date': today},
         )
         logger.error(f"Database backup not confirmed for {today}")
+
+
+@shared_task(bind=True, max_retries=0)
+def run_background_health_checks(self):
+    """
+    US-073: Refresh the detail health-check cache every 2 minutes.
+
+    Runs all 6 service checks (PostgreSQL, Redis, Celery, WhatsApp,
+    MTN MoMo, Airtel Money) in the background and stores the result in
+    Redis cache under the key used by GET /health/detail/.
+
+    Benefits:
+      - /health/detail/ responds instantly from cache (no on-demand latency).
+      - Monitoring tools polling every 30s don't hammer external APIs.
+      - Stale-if-error: if this task fails, the last good cache result is
+        served for up to HEALTH_CACHE_TTL (5 min) before expiry.
+    """
+    from config.health_checks import run_all_checks, STATUS_DOWN, CRITICAL_CHECKS
+    from config.health_views import HEALTH_CACHE_KEY, HEALTH_CACHE_TTL, _build_response
+
+    try:
+        checks = run_all_checks()
+        payload, _ = _build_response(checks)
+        payload['_cached'] = True
+
+        from django.core.cache import cache
+        cache.set(HEALTH_CACHE_KEY, payload, HEALTH_CACHE_TTL)
+
+        # Alert system admins if a critical service goes down
+        critical_names = set(CRITICAL_CHECKS.keys())
+        for name, result in checks.items():
+            if name in critical_names and result.status == STATUS_DOWN:
+                from notifications.services import send_admin_alert
+                send_admin_alert(
+                    alert_type='HEALTH_CHECK_CRITICAL_DOWN',
+                    message=(
+                        f"Critical service '{name}' is DOWN. "
+                        f"Detail: {result.detail}. "
+                        f"Latency: {result.latency_ms}ms."
+                    ),
+                    payload={'service': name, 'detail': result.detail, 'latency_ms': result.latency_ms},
+                )
+                logger.error(f"[HEALTH] Critical service DOWN: {name} — {result.detail}")
+
+        logger.info(f"[HEALTH] Background health checks completed. Status: {payload['status']}")
+
+    except Exception as exc:
+        logger.exception(f"run_background_health_checks failed: {exc}")
