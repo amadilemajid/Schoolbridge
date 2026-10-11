@@ -199,7 +199,6 @@ class AttendanceSummaryView(APIView):
             
             # Bulk query aggregates to eliminate N+1 queries (US-073 performance)
             from django.db.models import Count, Q
-            from .models import AttendanceRecord
             
             stats = AttendanceRecord.all_objects.filter(
                 class_group=cg,
